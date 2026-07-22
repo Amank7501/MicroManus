@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 
@@ -33,14 +34,22 @@ export default async function DashboardPage() {
         <div className="rounded-full border border-black/[.08] px-4 py-1.5 text-sm font-medium dark:border-white/[.145]">
           {credits.balance} credit{credits.balance === 1 ? "" : "s"} remaining
         </div>
-        <form action="/auth/signout" method="post">
-          <button
-            type="submit"
+        <div className="flex gap-3">
+          <Link
+            href="/settings"
             className="rounded-full border border-black/[.08] px-5 py-2 text-sm font-medium transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a]"
           >
-            Sign out
-          </button>
-        </form>
+            LLM connection settings
+          </Link>
+          <form action="/auth/signout" method="post">
+            <button
+              type="submit"
+              className="rounded-full border border-black/[.08] px-5 py-2 text-sm font-medium transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a]"
+            >
+              Sign out
+            </button>
+          </form>
+        </div>
       </main>
     </div>
   );
