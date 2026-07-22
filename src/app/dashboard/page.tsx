@@ -11,6 +11,16 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
+  const { data: credits } = await supabase
+    .from("credits")
+    .select("balance")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (!credits) {
+    redirect("/paywall");
+  }
+
   return (
     <div className="flex flex-1 flex-col items-center justify-center bg-zinc-50 font-sans dark:bg-black">
       <main className="flex flex-col items-center gap-4 text-center">
@@ -20,6 +30,9 @@ export default async function DashboardPage() {
         <p className="text-zinc-600 dark:text-zinc-400">
           Signed in as {user.email}
         </p>
+        <div className="rounded-full border border-black/[.08] px-4 py-1.5 text-sm font-medium dark:border-white/[.145]">
+          {credits.balance} credit{credits.balance === 1 ? "" : "s"} remaining
+        </div>
         <form action="/auth/signout" method="post">
           <button
             type="submit"
