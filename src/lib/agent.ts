@@ -49,7 +49,17 @@ export type ToolDefinition = {
   };
 };
 
-export type ToolExecutor = (args: Record<string, unknown>) => Promise<string>;
+// A single web_search result, numbered in the order it was found across the
+// whole run (not reset per search call). The model is instructed to cite
+// these indices inline as [n]; callers resolve [n] back to a title/url by
+// cross-referencing this list — nothing about citations is persisted as its
+// own column, it's derived from the same tool-result content already saved.
+export type SourceRef = { index: number; title: string; url: string };
+
+export type ToolExecutor = (
+  args: Record<string, unknown>,
+  context: { sources: SourceRef[] },
+) => Promise<string>;
 
 const WEB_SEARCH_TOOL: ToolDefinition = {
   type: "function",
@@ -253,12 +263,22 @@ async function executeTool(
   name: string,
   args: Record<string, unknown>,
   extraExecutors: Record<string, ToolExecutor>,
+  sources: SourceRef[],
 ): Promise<string> {
   if (name === "web_search") {
     const query = typeof args.query === "string" ? args.query : "";
     try {
       const results = await webSearch(query);
-      return JSON.stringify(results);
+      // Number each result as it's added to the run's source list, and
+      // embed that index in what's fed back to the model — this is the only
+      // place indices are assigned, so the model, the persisted tool-result
+      // content, and the run's `sources` list all agree on the same numbers.
+      const indexed = results.map((r) => {
+        const source: SourceRef = { index: sources.length + 1, title: r.title || r.url, url: r.url };
+        sources.push(source);
+        return { index: source.index, title: r.title, url: r.url, content: r.content };
+      });
+      return JSON.stringify(indexed);
     } catch (err) {
       return JSON.stringify({ error: err instanceof Error ? err.message : "Search failed" });
     }
@@ -270,7 +290,7 @@ async function executeTool(
   }
 
   try {
-    return await executor(args);
+    return await executor(args, { sources });
   } catch (err) {
     return JSON.stringify({ error: err instanceof Error ? err.message : "Tool failed" });
   }
@@ -287,6 +307,9 @@ export async function* runAgent(
   const tools = [WEB_SEARCH_TOOL, ...extraTools];
   // The clean, wire-format history replayed to the provider.
   const conversation: AgentMessage[] = [...priorMessages];
+  // Accumulates across the whole run (not reset per tool call) so every
+  // search result gets a stable, unique citation index.
+  const sources: SourceRef[] = [];
 
   for (let i = 0; i < MAX_STEPS; i++) {
     const forceFinal = i === MAX_STEPS - 1;
@@ -352,7 +375,7 @@ export async function* runAgent(
           // will produce an error result rather than crashing the loop.
         }
 
-        const raw = await executeTool(call.function.name, args, extraExecutors);
+        const raw = await executeTool(call.function.name, args, extraExecutors, sources);
         return { call, raw };
       }),
     );

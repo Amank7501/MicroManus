@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import NewChatButton from "./new-chat-button";
 import ToolStep from "./tool-step";
-import Markdown from "./markdown";
+import Markdown, { type Source } from "./markdown";
 
 type ToolCallInfo = { id: string; function: { name: string; arguments: string } };
 
@@ -44,12 +44,102 @@ type ToolStepData = {
 };
 
 type FeedItem =
-  | { type: "message"; created_at: string; message: Message }
+  | { type: "message"; created_at: string; message: Message; messageIndex: number }
   | { type: "report"; created_at: string; report: ReportSummary }
   | { type: "step"; created_at: string; key: string; step: ToolStepData };
 
 function hasToolCalls(m: Message): boolean {
   return Boolean(m.tool_calls && m.tool_calls.length > 0);
+}
+
+// A final answer's sources are whatever web_search results the tool
+// messages since the triggering user message carry — each result was
+// numbered inline (in its existing, already-persisted JSON content) when it
+// was found, so this needs no separate storage, just a backward scan.
+function collectRunSources(all: Message[], uptoIndex: number): Map<number, Source> {
+  const map = new Map<number, Source>();
+  for (let i = uptoIndex - 1; i >= 0; i--) {
+    const m = all[i];
+    if (m.role === "user") break;
+    if (m.role !== "tool") continue;
+    try {
+      const parsed = JSON.parse(m.content);
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          if (
+            item &&
+            typeof item === "object" &&
+            typeof item.index === "number" &&
+            typeof item.url === "string"
+          ) {
+            map.set(item.index, { title: String(item.title ?? item.url), url: item.url });
+          }
+        }
+      }
+    } catch {
+      // not a web_search result blob (e.g. a create_pdf_report result) — skip
+    }
+  }
+  return map;
+}
+
+type CitedSource = { index: number; title: string; url: string };
+
+function citedSourceList(content: string, sources: Map<number, Source>): CitedSource[] {
+  const cited = new Set<number>();
+  const regex = /\[(\d+)\]/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(content)) !== null) {
+    cited.add(Number(match[1]));
+  }
+  return [...cited]
+    .filter((i) => sources.has(i))
+    .sort((a, b) => a - b)
+    .map((i) => ({ index: i, ...sources.get(i)! }));
+}
+
+function FinalAnswer({
+  content,
+  allMessages,
+  uptoIndex,
+}: {
+  content: string;
+  allMessages: Message[];
+  uptoIndex: number;
+}) {
+  const sourcesMap = collectRunSources(allMessages, uptoIndex);
+  const cited = citedSourceList(content, sourcesMap);
+
+  return (
+    <div className="mr-auto w-full">
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-foreground text-[10px] font-medium text-background">
+          M
+        </span>
+        <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">MicroManus</span>
+      </div>
+      <div className="pl-7 text-black dark:text-zinc-50">
+        <Markdown content={content} sources={sourcesMap} />
+        {cited.length > 0 && (
+          <div className="mt-3 flex flex-col gap-1 border-t border-black/[.08] pt-3 dark:border-white/[.145]">
+            <p className="text-xs font-medium text-zinc-400 dark:text-zinc-500">Sources</p>
+            {cited.map((s) => (
+              <a
+                key={s.index}
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-start gap-2 text-xs text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+              >
+                <span className="shrink-0 font-medium">[{s.index}]</span>
+                <span className="truncate underline underline-offset-4">{s.title}</span>
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function stepFromToolCall(call: ToolCallInfo, toolMessage: Message | undefined): ToolStepData {
@@ -239,8 +329,8 @@ export default function ChatView({
   }
 
   const feed: FeedItem[] = [];
-  for (const m of messages) {
-    if (m.role === "system" || m.role === "tool") continue;
+  messages.forEach((m, messageIndex) => {
+    if (m.role === "system" || m.role === "tool") return;
 
     if (m.role === "assistant" && hasToolCalls(m)) {
       for (const call of m.tool_calls!) {
@@ -251,11 +341,11 @@ export default function ChatView({
           step: stepFromToolCall(call, toolMessagesById.get(call.id)),
         });
       }
-      continue;
+      return;
     }
 
-    feed.push({ type: "message", created_at: m.created_at, message: m });
-  }
+    feed.push({ type: "message", created_at: m.created_at, message: m, messageIndex });
+  });
   for (const report of reports) {
     feed.push({ type: "report", created_at: report.created_at, report });
   }
@@ -345,35 +435,20 @@ export default function ChatView({
               }
 
               return (
-                <div key={m.id} className="mr-auto w-full">
-                  <div className="mb-1.5 flex items-center gap-2">
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-foreground text-[10px] font-medium text-background">
-                      M
-                    </span>
-                    <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                      MicroManus
-                    </span>
-                  </div>
-                  <div className="pl-7 text-black dark:text-zinc-50">
-                    <Markdown content={m.content} />
-                  </div>
-                </div>
+                <FinalAnswer
+                  key={m.id}
+                  content={m.content}
+                  allMessages={messages}
+                  uptoIndex={item.messageIndex}
+                />
               );
             })}
             {streamingContent !== null && (
-              <div className="mr-auto w-full">
-                <div className="mb-1.5 flex items-center gap-2">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-foreground text-[10px] font-medium text-background">
-                    M
-                  </span>
-                  <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                    MicroManus
-                  </span>
-                </div>
-                <div className="pl-7 text-black dark:text-zinc-50">
-                  <Markdown content={streamingContent} />
-                </div>
-              </div>
+              <FinalAnswer
+                content={streamingContent}
+                allMessages={messages}
+                uptoIndex={messages.length}
+              />
             )}
             {isThinking && (
               <div className="mr-auto flex items-center gap-2 pl-7 text-sm text-zinc-500 dark:text-zinc-400">

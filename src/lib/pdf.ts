@@ -6,6 +6,9 @@ const PAGE_HEIGHT = 841.89;
 const MARGIN = 50;
 const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
 const TEXT_COLOR = rgb(0.1, 0.1, 0.1);
+const MUTED_COLOR = rgb(0.45, 0.45, 0.45);
+
+export type PdfSource = { index: number; title: string; url: string };
 
 function stripInlineMarkdown(text: string): string {
   return text
@@ -32,7 +35,23 @@ function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): 
   return lines;
 }
 
-export async function generateReportPdf(title: string, markdown: string): Promise<Uint8Array> {
+// [n] markers the report text actually uses — only these show up in the
+// Sources section, same rule the chat UI follows (cited, not just searched).
+function citedIndices(markdown: string): Set<number> {
+  const found = new Set<number>();
+  const regex = /\[(\d+)\]/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(markdown)) !== null) {
+    found.add(Number(match[1]));
+  }
+  return found;
+}
+
+export async function generateReportPdf(
+  title: string,
+  markdown: string,
+  sources: PdfSource[] = [],
+): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const boldFont = await doc.embedFont(StandardFonts.HelveticaBold);
@@ -47,11 +66,17 @@ export async function generateReportPdf(title: string, markdown: string): Promis
     }
   }
 
-  function drawParagraph(text: string, size: number, useFont: PDFFont, gapAfter: number) {
+  function drawParagraph(
+    text: string,
+    size: number,
+    useFont: PDFFont,
+    gapAfter: number,
+    color = TEXT_COLOR,
+  ) {
     const lines = wrapText(stripInlineMarkdown(text), useFont, size, CONTENT_WIDTH);
     for (const line of lines) {
       ensureSpace(size + 4);
-      page.drawText(line, { x: MARGIN, y, size, font: useFont, color: TEXT_COLOR });
+      page.drawText(line, { x: MARGIN, y, size, font: useFont, color });
       y -= size + 4;
     }
     y -= gapAfter;
@@ -87,6 +112,20 @@ export async function generateReportPdf(title: string, markdown: string): Promis
       y -= 2;
     } else {
       drawParagraph(line, 11, font, 6);
+    }
+  }
+
+  const cited = citedIndices(markdown);
+  const citedSources = sources
+    .filter((s) => cited.has(s.index))
+    .sort((a, b) => a.index - b.index);
+
+  if (citedSources.length > 0) {
+    y -= 6;
+    drawParagraph("Sources", 13, boldFont, 6);
+    for (const source of citedSources) {
+      drawParagraph(`[${source.index}] ${source.title}`, 10, font, 1);
+      drawParagraph(source.url, 9, font, 6, MUTED_COLOR);
     }
   }
 

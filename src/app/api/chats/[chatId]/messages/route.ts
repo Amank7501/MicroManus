@@ -6,6 +6,7 @@ import { decrypt } from "@/lib/crypto";
 import {
   runAgent,
   type AgentMessage,
+  type SourceRef,
   type ToolCall,
   type ToolDefinition,
 } from "@/lib/agent";
@@ -38,7 +39,13 @@ function buildSystemPrompt(): string {
     "organize it with headings and cover causes, impact, and what can be done. " +
     "If the user asked for a report or a document they can download, call " +
     "create_pdf_report once you have enough material, then still give a short " +
-    "final reply summarizing it — the download link is shown separately in the UI."
+    "final reply summarizing it — the download link is shown separately in the UI. " +
+    "Each web_search result includes a numbered \"index\". When a sentence in your " +
+    "answer (or in a PDF report) relies on a specific result, cite it immediately " +
+    "after with [n] using that exact index — e.g. \"Wildfire acreage doubled [2].\" " +
+    "Only cite results you actually used; never invent a number or cite one you " +
+    "didn't rely on. A sources list is generated for you automatically from your " +
+    "citations — do not write your own References or Sources section."
   );
 }
 
@@ -186,12 +193,15 @@ export async function POST(
 
       const createdReports: { id: string; title: string; created_at: string }[] = [];
 
-      async function createPdfReportExecutor(args: Record<string, unknown>): Promise<string> {
+      async function createPdfReportExecutor(
+        args: Record<string, unknown>,
+        context: { sources: SourceRef[] },
+      ): Promise<string> {
         const title =
           typeof args.title === "string" && args.title.trim() ? args.title.trim() : "Report";
         const markdown = typeof args.markdown === "string" ? args.markdown : "";
 
-        const pdfBytes = await generateReportPdf(title, markdown);
+        const pdfBytes = await generateReportPdf(title, markdown, context.sources);
         const reportId = crypto.randomUUID();
         const storagePath = `${userId}/${reportId}.pdf`;
 
