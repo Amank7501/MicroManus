@@ -3,7 +3,12 @@ import crypto from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decrypt } from "@/lib/crypto";
-import { runAgent, type AgentMessage, type ToolCall, type ToolDefinition } from "@/lib/agent";
+import {
+  runAgent,
+  type AgentMessage,
+  type ToolCall,
+  type ToolDefinition,
+} from "@/lib/agent";
 import { generateReportPdf } from "@/lib/pdf";
 import { computeCost } from "@/lib/pricing";
 
@@ -189,7 +194,8 @@ export async function POST(
   );
 
   const persisted: MessageRow[] = [];
-  for (const msg of agentResult.newMessages) {
+  for (const step of agentResult.newMessages) {
+    const msg = step.message;
     const { data: row } = await supabase
       .from("messages")
       .insert({
@@ -204,8 +210,8 @@ export async function POST(
 
     if (row) persisted.push(row);
 
-    if (row && msg.role === "assistant" && msg.usage) {
-      const { input, output, cached } = msg.usage;
+    if (row && msg.role === "assistant" && step.usage) {
+      const { input, output, cached } = step.usage;
       const cost = computeCost(keyRow.selected_model, input, output, cached);
       await supabase.from("usage").insert({
         message_id: row.id,

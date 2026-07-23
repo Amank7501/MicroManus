@@ -9,10 +9,20 @@ export type ToolCall = {
 
 export type Usage = { input: number; output: number; cached: number };
 
+// Exactly the shape sent to (and echoed back into) the provider's API —
+// no extra fields. Providers reject unknown properties on replayed
+// messages (e.g. "'messages.2': property 'usage' is unsupported"), so
+// anything not part of the wire format (like token usage) must be
+// tracked separately — see AgentStep below.
 export type AgentMessage =
   | { role: "system" | "user"; content: string }
-  | { role: "assistant"; content: string; tool_calls?: ToolCall[]; usage?: Usage }
+  | { role: "assistant"; content: string; tool_calls?: ToolCall[] }
   | { role: "tool"; content: string; tool_call_id: string };
+
+export type AgentStep = {
+  message: AgentMessage;
+  usage?: Usage;
+};
 
 export type ToolDefinition = {
   type: "function";
@@ -147,38 +157,43 @@ export async function runAgent(
   extraTools: ToolDefinition[] = [],
   extraExecutors: Record<string, ToolExecutor> = {},
 ): Promise<
-  | { ok: true; newMessages: AgentMessage[] }
-  | { ok: false; message: string; newMessages: AgentMessage[] }
+  | { ok: true; newMessages: AgentStep[] }
+  | { ok: false; message: string; newMessages: AgentStep[] }
 > {
   const tools = [WEB_SEARCH_TOOL, ...extraTools];
+  // `conversation` is the clean, wire-format history replayed to the
+  // provider. `steps` mirrors every entry appended beyond priorMessages,
+  // pairing it with usage where applicable — this is what callers persist.
   const conversation: AgentMessage[] = [...priorMessages];
-  const startLength = conversation.length;
+  const steps: AgentStep[] = [];
 
   for (let i = 0; i < MAX_STEPS; i++) {
     const forceFinal = i === MAX_STEPS - 1;
     const result = await callModel(endpoint, apiKey, model, conversation, tools, !forceFinal);
 
     if (!result.ok) {
-      return { ok: false, message: result.message, newMessages: conversation.slice(startLength) };
+      return { ok: false, message: result.message, newMessages: steps };
     }
 
     const toolCalls = result.message.tool_calls ?? [];
 
     if (toolCalls.length === 0) {
-      conversation.push({
+      const assistantMessage: AgentMessage = {
         role: "assistant",
         content: result.message.content ?? "",
-        usage: result.usage,
-      });
-      return { ok: true, newMessages: conversation.slice(startLength) };
+      };
+      conversation.push(assistantMessage);
+      steps.push({ message: assistantMessage, usage: result.usage });
+      return { ok: true, newMessages: steps };
     }
 
-    conversation.push({
+    const assistantMessage: AgentMessage = {
       role: "assistant",
       content: result.message.content ?? "",
       tool_calls: toolCalls,
-      usage: result.usage,
-    });
+    };
+    conversation.push(assistantMessage);
+    steps.push({ message: assistantMessage, usage: result.usage });
 
     const toolResults = await Promise.all(
       toolCalls.map(async (call) => {
@@ -196,13 +211,15 @@ export async function runAgent(
     );
 
     for (const { call, raw } of toolResults) {
-      conversation.push({ role: "tool", tool_call_id: call.id, content: raw });
+      const toolMessage: AgentMessage = { role: "tool", tool_call_id: call.id, content: raw };
+      conversation.push(toolMessage);
+      steps.push({ message: toolMessage });
     }
   }
 
   return {
     ok: false,
     message: "The agent could not reach a final answer within the step limit.",
-    newMessages: conversation.slice(startLength),
+    newMessages: steps,
   };
 }
