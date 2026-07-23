@@ -176,3 +176,19 @@ drop policy if exists "Users can insert own usage" on public.usage;
 create policy "Users can insert own usage"
   on public.usage for insert
   with check (auth.uid() = user_id);
+
+-- ===== Amendment: Ollama support (HTTP Basic auth instead of an API key) =====
+-- Self-hosted Ollama has no API key concept — it's typically either
+-- unprotected (local) or sits behind a reverse proxy with HTTP Basic Auth.
+-- encrypted_key becomes optional (only used when auth_type = 'api_key');
+-- encrypted_username/password are only used when auth_type = 'basic', and
+-- may themselves be empty-string-encrypted if the instance needs no auth.
+
+alter table public.api_keys alter column encrypted_key drop not null;
+alter table public.api_keys add column if not exists auth_type text not null default 'api_key';
+alter table public.api_keys add column if not exists encrypted_username text;
+alter table public.api_keys add column if not exists encrypted_password text;
+
+alter table public.api_keys drop constraint if exists api_keys_auth_type_check;
+alter table public.api_keys add constraint api_keys_auth_type_check
+  check (auth_type in ('api_key', 'basic'));

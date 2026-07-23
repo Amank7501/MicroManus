@@ -1,5 +1,6 @@
 import "server-only";
 import { webSearch } from "./tools/web-search";
+import { authHeaders, type ConnectionAuth } from "./connection-auth";
 
 export type ToolCall = {
   id: string;
@@ -75,7 +76,7 @@ function parseUsage(data: Record<string, unknown> | null): Usage | undefined {
 
 async function callModel(
   endpoint: string,
-  apiKey: string,
+  auth: ConnectionAuth,
   model: string,
   messages: AgentMessage[],
   tools: ToolDefinition[],
@@ -93,7 +94,7 @@ async function callModel(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+        ...authHeaders(auth),
       },
       body: JSON.stringify({
         model,
@@ -155,7 +156,7 @@ async function executeTool(
 
 export async function runAgent(
   endpoint: string,
-  apiKey: string,
+  auth: ConnectionAuth,
   model: string,
   priorMessages: AgentMessage[],
   extraTools: ToolDefinition[] = [],
@@ -173,7 +174,7 @@ export async function runAgent(
 
   for (let i = 0; i < MAX_STEPS; i++) {
     const forceFinal = i === MAX_STEPS - 1;
-    let result = await callModel(endpoint, apiKey, model, conversation, tools, !forceFinal);
+    let result = await callModel(endpoint, auth, model, conversation, tools, !forceFinal);
     let toolsUnavailable = false;
 
     if (!result.ok && !forceFinal) {
@@ -181,12 +182,12 @@ export async function runAgent(
       // intermittently reject a turn with a tool-call validation error
       // when the model produces malformed tool-call output. Retry once —
       // it's often transient — before giving up on tools for this turn.
-      result = await callModel(endpoint, apiKey, model, conversation, tools, true);
+      result = await callModel(endpoint, auth, model, conversation, tools, true);
 
       if (!result.ok) {
         // Still failing. Don't surface a raw provider error to the user —
         // finish the run with a plain, tool-free answer instead.
-        result = await callModel(endpoint, apiKey, model, conversation, tools, false);
+        result = await callModel(endpoint, auth, model, conversation, tools, false);
         toolsUnavailable = true;
       }
     }

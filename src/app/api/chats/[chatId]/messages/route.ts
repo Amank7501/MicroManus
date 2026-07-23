@@ -11,6 +11,7 @@ import {
 } from "@/lib/agent";
 import { generateReportPdf } from "@/lib/pdf";
 import { computeCost } from "@/lib/pricing";
+import type { ConnectionAuth } from "@/lib/connection-auth";
 
 export const maxDuration = 60;
 
@@ -98,7 +99,7 @@ export async function POST(
   const admin = createAdminClient();
   const { data: keyRow } = await admin
     .from("api_keys")
-    .select("endpoint, encrypted_key, selected_model")
+    .select("endpoint, auth_type, encrypted_key, encrypted_username, encrypted_password, selected_model")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -107,6 +108,20 @@ export async function POST(
       { error: "Connect an LLM API key in Settings before chatting" },
       { status: 400 },
     );
+  }
+
+  let auth: ConnectionAuth;
+  if (keyRow.auth_type === "basic") {
+    const username = keyRow.encrypted_username ? decrypt(keyRow.encrypted_username) : "";
+    const password = keyRow.encrypted_password ? decrypt(keyRow.encrypted_password) : "";
+    // Both fields are stored encrypted even when blank (see the settings
+    // route), so check the *decrypted* values — not just ciphertext
+    // presence — before deciding whether to send a Basic auth header at
+    // all. Sending "Basic <base64 of \":\">" to an instance that expects no
+    // auth can cause it to reject the request outright.
+    auth = username || password ? { type: "basic", username, password } : { type: "none" };
+  } else {
+    auth = { type: "bearer", token: keyRow.encrypted_key ? decrypt(keyRow.encrypted_key) : "" };
   }
 
   const { data: userMessage, error: insertError } = await supabase
@@ -183,10 +198,9 @@ export async function POST(
     return JSON.stringify({ status: "created", reportId: reportRow.id, title: reportRow.title });
   }
 
-  const apiKey = decrypt(keyRow.encrypted_key);
   const agentResult = await runAgent(
     keyRow.endpoint,
-    apiKey,
+    auth,
     keyRow.selected_model,
     priorMessages,
     [PDF_TOOL],

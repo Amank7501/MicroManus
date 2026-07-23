@@ -29,21 +29,25 @@ export default function SettingsForm({
   const [provider, setProvider] = useState<Provider>(startProvider);
   const [endpoint, setEndpoint] = useState(initialEndpoint ?? startProviderInfo.defaultEndpoint);
   const [modelChoice, setModelChoice] = useState(
-    startIsCustomModel ? CUSTOM_MODEL : (initialModel ?? startProviderInfo.models[0]),
+    startIsCustomModel || startProviderInfo.models.length === 0
+      ? CUSTOM_MODEL
+      : (initialModel ?? startProviderInfo.models[0]),
   );
   const [customModel, setCustomModel] = useState(startIsCustomModel ? (initialModel ?? "") : "");
   const [apiKey, setApiKey] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>((initialStatus as Status) ?? null);
 
-  const hasSavedKey = initialStatus !== null;
+  const hasSavedCredentials = initialStatus !== null;
 
   function handleProviderChange(next: Provider) {
     const nextInfo = getProvider(next)!;
     const prevInfo = getProvider(provider)!;
     setProvider(next);
-    setModelChoice(nextInfo.models[0]);
+    setModelChoice(nextInfo.models.length === 0 ? CUSTOM_MODEL : nextInfo.models[0]);
     setCustomModel("");
     if (endpoint === "" || endpoint === prevInfo.defaultEndpoint) {
       setEndpoint(nextInfo.defaultEndpoint);
@@ -60,7 +64,7 @@ export default function SettingsForm({
     const res = await fetch("/api/settings/key", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider, endpoint, model, apiKey }),
+      body: JSON.stringify({ provider, endpoint, model, apiKey, username, password }),
     });
     const data = await res.json();
 
@@ -74,6 +78,8 @@ export default function SettingsForm({
     setStatus(data.status);
     setError(data.status === "failed" ? data.message ?? "Connection failed" : null);
     setApiKey("");
+    setUsername("");
+    setPassword("");
   }
 
   const providerInfo = getProvider(provider)!;
@@ -96,7 +102,9 @@ export default function SettingsForm({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Endpoint</label>
+        <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+          {providerInfo.id === "ollama" ? "Base URL" : "Endpoint"}
+        </label>
         <input
           type="text"
           value={endpoint}
@@ -108,40 +116,77 @@ export default function SettingsForm({
 
       <div className="flex flex-col gap-1.5">
         <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Model</label>
-        <select
-          value={modelChoice}
-          onChange={(e) => setModelChoice(e.target.value)}
-          className="h-11 w-full rounded-lg border border-black/[.08] bg-transparent px-3 text-sm outline-none focus:border-black/30 dark:border-white/[.145] dark:focus:border-white/30"
-        >
-          {providerInfo.models.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-          <option value={CUSTOM_MODEL}>Custom model id…</option>
-        </select>
-        {modelChoice === CUSTOM_MODEL && (
+        {providerInfo.models.length > 0 && (
+          <select
+            value={modelChoice}
+            onChange={(e) => setModelChoice(e.target.value)}
+            className="h-11 w-full rounded-lg border border-black/[.08] bg-transparent px-3 text-sm outline-none focus:border-black/30 dark:border-white/[.145] dark:focus:border-white/30"
+          >
+            {providerInfo.models.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+            <option value={CUSTOM_MODEL}>Custom model id…</option>
+          </select>
+        )}
+        {(modelChoice === CUSTOM_MODEL || providerInfo.models.length === 0) && (
           <input
             type="text"
             value={customModel}
             onChange={(e) => setCustomModel(e.target.value)}
-            placeholder="e.g. gpt-5.1-turbo"
+            placeholder={providerInfo.id === "ollama" ? "e.g. llama3.1:8b" : "e.g. gpt-5.1-turbo"}
             className="h-11 w-full rounded-lg border border-black/[.08] bg-transparent px-3 text-sm outline-none focus:border-black/30 dark:border-white/[.145] dark:focus:border-white/30"
           />
         )}
       </div>
 
-      <div className="flex flex-col gap-1.5">
-        <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">API key</label>
-        <input
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          autoComplete="off"
-          placeholder={hasSavedKey ? "•••••••• saved — leave blank to keep" : "sk-…"}
-          className="h-11 w-full rounded-lg border border-black/[.08] bg-transparent px-3 text-sm outline-none focus:border-black/30 dark:border-white/[.145] dark:focus:border-white/30"
-        />
-      </div>
+      {providerInfo.authType === "api_key" ? (
+        <div className="flex flex-col gap-1.5">
+          <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">API key</label>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            autoComplete="off"
+            placeholder={hasSavedCredentials ? "•••••••• saved — leave blank to keep" : "sk-…"}
+            className="h-11 w-full rounded-lg border border-black/[.08] bg-transparent px-3 text-sm outline-none focus:border-black/30 dark:border-white/[.145] dark:focus:border-white/30"
+          />
+        </div>
+      ) : (
+        <>
+          <p className="-mb-2 text-xs text-zinc-500 dark:text-zinc-400">
+            Only needed if your Ollama instance sits behind Basic Auth (e.g. a reverse proxy).
+            Leave both blank for a local, unprotected instance.
+          </p>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              Username <span className="font-normal text-zinc-500">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="off"
+              placeholder={hasSavedCredentials ? "saved — leave blank to keep" : "optional"}
+              className="h-11 w-full rounded-lg border border-black/[.08] bg-transparent px-3 text-sm outline-none focus:border-black/30 dark:border-white/[.145] dark:focus:border-white/30"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              Password <span className="font-normal text-zinc-500">(optional)</span>
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="off"
+              placeholder={hasSavedCredentials ? "•••••••• saved — leave blank to keep" : "optional"}
+              className="h-11 w-full rounded-lg border border-black/[.08] bg-transparent px-3 text-sm outline-none focus:border-black/30 dark:border-white/[.145] dark:focus:border-white/30"
+            />
+          </div>
+        </>
+      )}
 
       <button
         type="submit"

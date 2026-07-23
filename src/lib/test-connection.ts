@@ -1,8 +1,9 @@
 import "server-only";
+import { authHeaders, type ConnectionAuth } from "./connection-auth";
 
 export async function testConnection(
   endpoint: string,
-  apiKey: string,
+  auth: ConnectionAuth,
   model: string,
 ): Promise<{ ok: boolean; message?: string }> {
   const base = endpoint.replace(/\/+$/, "");
@@ -16,7 +17,7 @@ export async function testConnection(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+        ...authHeaders(auth),
       },
       body: JSON.stringify({
         model,

@@ -46,8 +46,9 @@ export default async function SettingsPage() {
           </Link>
         </div>
         <p className="-mt-4 text-sm text-zinc-600 dark:text-zinc-400">
-          Bring your own OpenAI-compatible API key. It&apos;s encrypted and stored server-side —
-          never sent to the browser.
+          Bring your own OpenAI-compatible endpoint — an API key for hosted providers, or a
+          base URL (and optional username/password) for a self-hosted Ollama instance. Credentials
+          are encrypted and stored server-side, never sent to the browser.
         </p>
 
         <SettingsForm

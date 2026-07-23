@@ -3,7 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { encrypt, decrypt } from "@/lib/crypto";
 import { testConnection } from "@/lib/test-connection";
-import { getProvider } from "@/lib/models";
+import { getProvider, getAuthType } from "@/lib/models";
+import type { ConnectionAuth } from "@/lib/connection-auth";
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -20,6 +21,8 @@ export async function POST(request: Request) {
   const endpoint = typeof body?.endpoint === "string" ? body.endpoint.trim() : "";
   const model = typeof body?.model === "string" ? body.model.trim() : "";
   const apiKey = typeof body?.apiKey === "string" ? body.apiKey.trim() : "";
+  const username = typeof body?.username === "string" ? body.username : "";
+  const password = typeof body?.password === "string" ? body.password : "";
 
   if (!getProvider(provider)) {
     return NextResponse.json({ error: "Unknown provider" }, { status: 400 });
@@ -31,30 +34,68 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Model is required" }, { status: 400 });
   }
 
+  const authType = getAuthType(provider);
   const admin = createAdminClient();
 
-  let keyToTest = apiKey;
-  if (!keyToTest) {
-    const { data: existing } = await admin
-      .from("api_keys")
-      .select("encrypted_key")
-      .eq("user_id", user.id)
-      .maybeSingle();
+  let auth: ConnectionAuth;
+  let encryptedKey: string | null = null;
+  let encryptedUsername: string | null = null;
+  let encryptedPassword: string | null = null;
 
-    if (!existing) {
-      return NextResponse.json({ error: "API key is required" }, { status: 400 });
+  if (authType === "api_key") {
+    let keyToTest = apiKey;
+    if (!keyToTest) {
+      const { data: existing } = await admin
+        .from("api_keys")
+        .select("encrypted_key")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (!existing?.encrypted_key) {
+        return NextResponse.json({ error: "API key is required" }, { status: 400 });
+      }
+      keyToTest = decrypt(existing.encrypted_key);
     }
-    keyToTest = decrypt(existing.encrypted_key);
+
+    auth = { type: "bearer", token: keyToTest };
+    encryptedKey = encrypt(keyToTest);
+  } else {
+    // Basic auth (Ollama): both fields are optional — a local, unprotected
+    // instance needs no credentials at all. Leaving both blank on an
+    // update keeps whatever was saved before instead of clearing it.
+    let usernameToTest = username;
+    let passwordToTest = password;
+
+    if (!username.trim() && !password.trim()) {
+      const { data: existing } = await admin
+        .from("api_keys")
+        .select("encrypted_username, encrypted_password")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      usernameToTest = existing?.encrypted_username ? decrypt(existing.encrypted_username) : "";
+      passwordToTest = existing?.encrypted_password ? decrypt(existing.encrypted_password) : "";
+    }
+
+    auth =
+      usernameToTest || passwordToTest
+        ? { type: "basic", username: usernameToTest, password: passwordToTest }
+        : { type: "none" };
+    encryptedUsername = encrypt(usernameToTest);
+    encryptedPassword = encrypt(passwordToTest);
   }
 
-  const result = await testConnection(endpoint, keyToTest, model);
+  const result = await testConnection(endpoint, auth, model);
 
   const { error } = await admin.from("api_keys").upsert(
     {
       user_id: user.id,
       provider,
       endpoint,
-      encrypted_key: encrypt(keyToTest),
+      auth_type: authType,
+      encrypted_key: encryptedKey,
+      encrypted_username: encryptedUsername,
+      encrypted_password: encryptedPassword,
       selected_model: model,
       status: result.ok ? "connected" : "failed",
       last_checked_at: new Date().toISOString(),
