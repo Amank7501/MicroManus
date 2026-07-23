@@ -100,7 +100,12 @@ async function callModel(
         model,
         messages,
         max_tokens: 2048,
-        ...(allowTools ? { tools, tool_choice: "auto" } : { tool_choice: "none" }),
+        // `tool_choice` is only valid when `tools` is also present — some
+        // providers (OpenAI included) reject "tool_choice: none" on its
+        // own with "'tool_choice' is only allowed when 'tools' are
+        // specified". Omitting both when tools are disabled for this call
+        // is simplest and has the same effect: the model has nothing to call.
+        ...(allowTools ? { tools, tool_choice: "auto" } : {}),
       }),
       signal: controller.signal,
     });

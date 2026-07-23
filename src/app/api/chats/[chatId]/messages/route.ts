@@ -15,15 +15,32 @@ import type { ConnectionAuth } from "@/lib/connection-auth";
 
 export const maxDuration = 60;
 
-const SYSTEM_PROMPT =
-  "You are MicroManus, a deep-research assistant. You have a web_search tool — " +
-  "use it whenever a question needs current facts, statistics, or news you " +
-  "aren't confident about. Think step by step, search as needed, and then " +
-  "give a clear, well-structured final answer. When asked for a report, " +
-  "organize it with headings and cover causes, impact, and what can be done. " +
-  "If the user asked for a report or a document they can download, call " +
-  "create_pdf_report once you have enough material, then still give a short " +
-  "final reply summarizing it — the download link is shown separately in the UI.";
+function buildSystemPrompt(): string {
+  const now = new Date();
+  const todayLong = now.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+  const todayIso = now.toISOString().slice(0, 10);
+
+  return (
+    `Today's date is ${todayLong} (${todayIso}, UTC). Use this as the current ` +
+    "date for anything time-sensitive — relative terms like \"tomorrow\", " +
+    "\"this year\", or \"recent\", and any web_search queries — instead of a " +
+    "date from your training data. " +
+    "You are MicroManus, a deep-research assistant. You have a web_search tool — " +
+    "use it whenever a question needs current facts, statistics, or news you " +
+    "aren't confident about. Think step by step, search as needed, and then " +
+    "give a clear, well-structured final answer. When asked for a report, " +
+    "organize it with headings and cover causes, impact, and what can be done. " +
+    "If the user asked for a report or a document they can download, call " +
+    "create_pdf_report once you have enough material, then still give a short " +
+    "final reply summarizing it — the download link is shown separately in the UI."
+  );
+}
 
 const PDF_TOOL: ToolDefinition = {
   type: "function",
@@ -150,7 +167,7 @@ export async function POST(
     .order("seq", { ascending: true });
 
   const priorMessages: AgentMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: buildSystemPrompt() },
     ...(history ?? []).map((m): AgentMessage => {
       if (m.role === "tool") {
         return { role: "tool", content: m.content, tool_call_id: m.tool_call_id ?? "" };
