@@ -137,6 +137,7 @@ export default function SettingsForm({
           type="password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
+          autoComplete="off"
           placeholder={hasSavedKey ? "•••••••• saved — leave blank to keep" : "sk-…"}
           className="h-11 w-full rounded-lg border border-black/[.08] bg-transparent px-3 text-sm outline-none focus:border-black/30 dark:border-white/[.145] dark:focus:border-white/30"
         />
