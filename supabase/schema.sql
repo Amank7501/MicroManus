@@ -192,3 +192,32 @@ alter table public.api_keys add column if not exists encrypted_password text;
 alter table public.api_keys drop constraint if exists api_keys_auth_type_check;
 alter table public.api_keys add constraint api_keys_auth_type_check
   check (auth_type in ('api_key', 'basic'));
+
+-- ===== Phase 8: Razorpay payments =====
+-- Like credits/api_keys: no INSERT/UPDATE policy for `authenticated` —
+-- orders are created and payments verified server-side with the service
+-- role key (via the checkout callback, and independently via the
+-- webhook), so a user can never grant themselves credits by forging a
+-- client-side request.
+
+create table if not exists public.payments (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  method text not null check (method in ('coupon', 'razorpay')),
+  amount numeric not null default 0,
+  status text not null default 'pending' check (status in ('pending', 'success', 'failed')),
+  razorpay_order_id text,
+  razorpay_payment_id text,
+  created_at timestamptz not null default now()
+);
+
+create unique index if not exists payments_razorpay_order_id_idx
+  on public.payments (razorpay_order_id)
+  where razorpay_order_id is not null;
+
+alter table public.payments enable row level security;
+
+drop policy if exists "Users can view own payments" on public.payments;
+create policy "Users can view own payments"
+  on public.payments for select
+  using (auth.uid() = user_id);

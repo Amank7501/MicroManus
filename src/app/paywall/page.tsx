@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import PaywallForm from "./paywall-form";
+import RazorpayButton from "./razorpay-button";
 
 export default async function PaywallPage() {
   const supabase = await createClient();
@@ -30,11 +31,19 @@ export default async function PaywallPage() {
             Unlock MicroManus
           </h1>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-            Enter a coupon code to get 5 free credits and start researching.
+            Get 5 credits with a coupon code, or a one-time $5 payment.
           </p>
         </div>
 
         <PaywallForm />
+
+        <div className="flex w-full items-center gap-3 text-xs text-zinc-400 dark:text-zinc-500">
+          <span className="h-px flex-1 bg-black/[.08] dark:bg-white/[.145]" />
+          or
+          <span className="h-px flex-1 bg-black/[.08] dark:bg-white/[.145]" />
+        </div>
+
+        <RazorpayButton />
       </main>
     </div>
   );
