@@ -4,10 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import NewChatButton from "./new-chat-button";
 
+type ToolCallInfo = { id: string; function: { name: string; arguments: string } };
+
 type Message = {
   id: string;
-  role: "user" | "assistant" | "system";
+  role: "user" | "assistant" | "system" | "tool";
   content: string;
+  tool_calls?: ToolCallInfo[] | null;
+  tool_call_id?: string | null;
   created_at: string;
 };
 
@@ -21,10 +25,30 @@ type Props = {
   chats: ChatSummary[];
   activeChatId: string;
   initialMessages: Message[];
+  initialBalance: number;
 };
 
-export default function ChatView({ chats, activeChatId, initialMessages }: Props) {
+function searchQueryFrom(message: Message): string {
+  try {
+    const args = message.tool_calls?.[0]?.function.arguments ?? "{}";
+    return JSON.parse(args).query ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function searchResultCountFrom(message: Message): number | null {
+  try {
+    const parsed = JSON.parse(message.content);
+    return Array.isArray(parsed) ? parsed.length : null;
+  } catch {
+    return null;
+  }
+}
+
+export default function ChatView({ chats, activeChatId, initialMessages, initialBalance }: Props) {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [balance, setBalance] = useState(initialBalance);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +61,7 @@ export default function ChatView({ chats, activeChatId, initialMessages }: Props
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
     const content = input.trim();
-    if (!content || sending) return;
+    if (!content || sending || balance <= 0) return;
 
     setError(null);
     setSending(true);
@@ -57,29 +81,29 @@ export default function ChatView({ chats, activeChatId, initialMessages }: Props
     const data = await res.json();
     setSending(false);
 
-    if (!res.ok) {
-      setError(data.error ?? "Something went wrong");
-      if (data.userMessage) {
-        setMessages((prev) => prev.map((m) => (m.id === tempId ? data.userMessage : m)));
-      }
-      return;
-    }
-
     setMessages((prev) => [
-      ...prev.map((m) => (m.id === tempId ? data.userMessage : m)),
-      data.assistantMessage,
+      ...prev.map((m) => (m.id === tempId ? data.userMessage ?? m : m)),
+      ...(data.steps ?? []),
     ]);
+
+    if (typeof data.balance === "number") setBalance(data.balance);
+    if (!res.ok) setError(data.error ?? "Something went wrong");
   }
 
   return (
     <div className="flex h-dvh flex-1 bg-zinc-50 font-sans dark:bg-black">
       <aside className="flex w-64 shrink-0 flex-col gap-3 border-r border-black/[.08] p-4 dark:border-white/[.145]">
-        <Link
-          href="/dashboard"
-          className="text-sm font-medium text-zinc-600 underline underline-offset-4 dark:text-zinc-400"
-        >
-          ← Dashboard
-        </Link>
+        <div className="flex items-center justify-between">
+          <Link
+            href="/dashboard"
+            className="text-sm font-medium text-zinc-600 underline underline-offset-4 dark:text-zinc-400"
+          >
+            ← Dashboard
+          </Link>
+          <span className="rounded-full border border-black/[.08] px-2.5 py-0.5 text-xs font-medium dark:border-white/[.145]">
+            {balance} credit{balance === 1 ? "" : "s"}
+          </span>
+        </div>
         <NewChatButton />
         <div className="flex flex-1 flex-col gap-1 overflow-y-auto">
           {chats.map((chat) => (
@@ -100,7 +124,7 @@ export default function ChatView({ chats, activeChatId, initialMessages }: Props
 
       <div className="flex flex-1 flex-col">
         <div className="flex-1 overflow-y-auto px-6 py-6">
-          <div className="mx-auto flex max-w-2xl flex-col gap-4">
+          <div className="mx-auto flex max-w-2xl flex-col gap-3">
             {messages.length === 0 && (
               <p className="text-center text-sm text-zinc-500 dark:text-zinc-500">
                 Say something to start the conversation.
@@ -108,18 +132,44 @@ export default function ChatView({ chats, activeChatId, initialMessages }: Props
             )}
             {messages
               .filter((m) => m.role !== "system")
-              .map((m) => (
-                <div
-                  key={m.id}
-                  className={`max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm ${
-                    m.role === "user"
-                      ? "ml-auto bg-foreground text-background"
-                      : "mr-auto bg-black/[.05] text-black dark:bg-white/[.08] dark:text-zinc-50"
-                  }`}
-                >
-                  {m.content}
-                </div>
-              ))}
+              .map((m) => {
+                if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+                  const query = searchQueryFrom(m);
+                  return (
+                    <div
+                      key={m.id}
+                      className="mr-auto text-xs italic text-zinc-500 dark:text-zinc-400"
+                    >
+                      🔍 Searching the web for “{query}”…
+                    </div>
+                  );
+                }
+
+                if (m.role === "tool") {
+                  const count = searchResultCountFrom(m);
+                  return (
+                    <div
+                      key={m.id}
+                      className="mr-auto text-xs italic text-zinc-500 dark:text-zinc-400"
+                    >
+                      {count !== null ? `✅ Found ${count} result${count === 1 ? "" : "s"}` : "⚠️ Search failed"}
+                    </div>
+                  );
+                }
+
+                return (
+                  <div
+                    key={m.id}
+                    className={`max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm ${
+                      m.role === "user"
+                        ? "ml-auto bg-foreground text-background"
+                        : "mr-auto bg-black/[.05] text-black dark:bg-white/[.08] dark:text-zinc-50"
+                    }`}
+                  >
+                    {m.content}
+                  </div>
+                );
+              })}
             {sending && (
               <div className="mr-auto max-w-[80%] rounded-2xl bg-black/[.05] px-4 py-2.5 text-sm text-zinc-500 dark:bg-white/[.08] dark:text-zinc-400">
                 Thinking…
@@ -135,21 +185,26 @@ export default function ChatView({ chats, activeChatId, initialMessages }: Props
           </div>
         )}
 
-        <form
-          onSubmit={handleSend}
-          className="mx-auto flex w-full max-w-2xl gap-2 px-6 pb-6"
-        >
+        {balance <= 0 && (
+          <div className="mx-auto w-full max-w-2xl px-6">
+            <p className="mb-2 text-sm text-zinc-600 dark:text-zinc-400">
+              You&apos;re out of credits — more ways to add credits are coming soon.
+            </p>
+          </div>
+        )}
+
+        <form onSubmit={handleSend} className="mx-auto flex w-full max-w-2xl gap-2 px-6 pb-6">
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Message MicroManus…"
-            disabled={sending}
+            disabled={sending || balance <= 0}
             className="h-11 flex-1 rounded-full border border-black/[.08] bg-transparent px-4 text-sm outline-none focus:border-black/30 disabled:opacity-60 dark:border-white/[.145] dark:focus:border-white/30"
           />
           <button
             type="submit"
-            disabled={sending || input.trim().length === 0}
+            disabled={sending || balance <= 0 || input.trim().length === 0}
             className="flex h-11 shrink-0 items-center justify-center rounded-full bg-foreground px-5 text-sm font-medium text-background transition-colors hover:bg-[#383838] disabled:opacity-60 dark:hover:bg-[#ccc]"
           >
             Send

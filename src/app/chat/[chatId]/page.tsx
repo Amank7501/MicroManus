@@ -46,15 +46,16 @@ export default async function ChatPage({
 
   const { data: messages } = await supabase
     .from("messages")
-    .select("id, role, content, created_at")
+    .select("id, role, content, tool_calls, tool_call_id, created_at")
     .eq("chat_id", chatId)
-    .order("created_at", { ascending: true });
+    .order("seq", { ascending: true });
 
   return (
     <ChatView
       chats={chats ?? []}
       activeChatId={chatId}
       initialMessages={messages ?? []}
+      initialBalance={credits.balance}
     />
   );
 }

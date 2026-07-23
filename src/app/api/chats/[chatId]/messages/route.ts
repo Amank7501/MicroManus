@@ -2,10 +2,25 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decrypt } from "@/lib/crypto";
-import { chatCompletion, type ChatMessage } from "@/lib/llm";
+import { runAgent, type AgentMessage, type ToolCall } from "@/lib/agent";
+
+export const maxDuration = 60;
 
 const SYSTEM_PROMPT =
-  "You are MicroManus, a helpful research assistant. Answer clearly and concisely.";
+  "You are MicroManus, a deep-research assistant. You have a web_search tool — " +
+  "use it whenever a question needs current facts, statistics, or news you " +
+  "aren't confident about. Think step by step, search as needed, and then " +
+  "give a clear, well-structured final answer. When asked for a report, " +
+  "organize it with headings and cover causes, impact, and what can be done.";
+
+type MessageRow = {
+  id: string;
+  role: "user" | "assistant" | "system" | "tool";
+  content: string;
+  tool_calls: unknown;
+  tool_call_id: string | null;
+  created_at: string;
+};
 
 export async function POST(
   request: Request,
@@ -38,6 +53,16 @@ export async function POST(
     return NextResponse.json({ error: "Chat not found" }, { status: 404 });
   }
 
+  const { data: credits } = await supabase
+    .from("credits")
+    .select("balance")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (!credits || credits.balance <= 0) {
+    return NextResponse.json({ error: "You're out of credits" }, { status: 402 });
+  }
+
   const admin = createAdminClient();
   const { data: keyRow } = await admin
     .from("api_keys")
@@ -55,7 +80,7 @@ export async function POST(
   const { data: userMessage, error: insertError } = await supabase
     .from("messages")
     .insert({ chat_id: chatId, role: "user", content })
-    .select("id, role, content, created_at")
+    .select("id, role, content, tool_calls, tool_call_id, created_at")
     .single();
 
   if (insertError || !userMessage) {
@@ -73,34 +98,70 @@ export async function POST(
 
   const { data: history } = await supabase
     .from("messages")
-    .select("role, content")
+    .select("role, content, tool_calls, tool_call_id")
     .eq("chat_id", chatId)
-    .order("created_at", { ascending: true });
+    .order("seq", { ascending: true });
 
-  const messages: ChatMessage[] = [
+  const priorMessages: AgentMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
-    ...(history ?? []).map((m) => ({
-      role: m.role as ChatMessage["role"],
-      content: m.content as string,
-    })),
+    ...(history ?? []).map((m): AgentMessage => {
+      if (m.role === "tool") {
+        return { role: "tool", content: m.content, tool_call_id: m.tool_call_id ?? "" };
+      }
+      if (m.role === "assistant") {
+        return {
+          role: "assistant",
+          content: m.content,
+          tool_calls: (m.tool_calls as ToolCall[] | null) ?? undefined,
+        };
+      }
+      return { role: m.role as "system" | "user", content: m.content };
+    }),
   ];
 
   const apiKey = decrypt(keyRow.encrypted_key);
-  const result = await chatCompletion(keyRow.endpoint, apiKey, keyRow.selected_model, messages);
+  const agentResult = await runAgent(
+    keyRow.endpoint,
+    apiKey,
+    keyRow.selected_model,
+    priorMessages,
+  );
 
-  if (!result.ok) {
-    return NextResponse.json({ userMessage, error: result.message }, { status: 502 });
+  const persisted: MessageRow[] = [];
+  for (const msg of agentResult.newMessages) {
+    const { data: row } = await supabase
+      .from("messages")
+      .insert({
+        chat_id: chatId,
+        role: msg.role,
+        content: msg.content,
+        tool_calls: "tool_calls" in msg ? (msg.tool_calls ?? null) : null,
+        tool_call_id: msg.role === "tool" ? msg.tool_call_id : null,
+      })
+      .select("id, role, content, tool_calls, tool_call_id, created_at")
+      .single();
+
+    if (row) persisted.push(row);
   }
 
-  const { data: assistantMessage, error: assistantInsertError } = await supabase
-    .from("messages")
-    .insert({ chat_id: chatId, role: "assistant", content: result.content })
-    .select("id, role, content, created_at")
-    .single();
-
-  if (assistantInsertError || !assistantMessage) {
-    return NextResponse.json({ error: "Could not save response" }, { status: 500 });
+  if (!agentResult.ok) {
+    return NextResponse.json(
+      { userMessage, steps: persisted, error: agentResult.message, balance: credits.balance },
+      { status: 502 },
+    );
   }
 
-  return NextResponse.json({ userMessage, assistantMessage });
+  const { data: freshCredits } = await admin
+    .from("credits")
+    .select("balance")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  const newBalance = Math.max((freshCredits?.balance ?? credits.balance) - 1, 0);
+  await admin
+    .from("credits")
+    .update({ balance: newBalance, updated_at: new Date().toISOString() })
+    .eq("user_id", user.id);
+
+  return NextResponse.json({ userMessage, steps: persisted, balance: newBalance });
 }

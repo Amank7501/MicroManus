@@ -101,3 +101,17 @@ create policy "Users can insert own messages"
     select 1 from public.chats
     where chats.id = messages.chat_id and chats.user_id = auth.uid()
   ));
+
+-- ===== Phase 5: agent tool calls =====
+-- Widen messages to store tool-call turns (web search) alongside plain
+-- chat turns, and add a stable insertion-order column — the agent loop
+-- can insert several rows within the same millisecond, and created_at
+-- alone isn't precise enough to reconstruct order reliably.
+
+alter table public.messages drop constraint if exists messages_role_check;
+alter table public.messages add constraint messages_role_check
+  check (role in ('user', 'assistant', 'system', 'tool'));
+
+alter table public.messages add column if not exists tool_calls jsonb;
+alter table public.messages add column if not exists tool_call_id text;
+alter table public.messages add column if not exists seq bigserial;
