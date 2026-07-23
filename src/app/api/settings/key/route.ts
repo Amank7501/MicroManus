@@ -105,6 +105,7 @@ export async function POST(request: Request) {
   );
 
   if (error) {
+    console.error("api_keys upsert failed:", error);
     return NextResponse.json({ error: "Could not save settings" }, { status: 500 });
   }
 
