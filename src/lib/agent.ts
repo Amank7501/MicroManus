@@ -60,6 +60,21 @@ const WEB_SEARCH_TOOL: ToolDefinition = {
 // answer each consume one, so this allows a few searches before wrapping up.
 const MAX_STEPS = 5;
 
+// Injected only into the one-off fallback call after tool calling has
+// genuinely failed (retry exhausted) — never persisted into the real
+// conversation. Without this, models tend to hallucinate a plausible-looking
+// search or a PDF report that was never actually created.
+const TOOLS_UNAVAILABLE_NOTICE: AgentMessage = {
+  role: "system",
+  content:
+    "Tool calling just failed and is unavailable for this reply — you have NOT " +
+    "searched the web and you have NOT created a PDF report, no matter what you " +
+    "were about to do. Do not narrate, imply, or claim otherwise. Tell the user " +
+    "plainly that you couldn't use your tools for this message, then answer as " +
+    "best you can from what you already know, noting the information may be " +
+    "incomplete or not current.",
+};
+
 function parseUsage(data: Record<string, unknown> | null): Usage | undefined {
   const usage = data?.usage as Record<string, unknown> | undefined;
   if (!usage) return undefined;
@@ -191,8 +206,17 @@ export async function runAgent(
 
       if (!result.ok) {
         // Still failing. Don't surface a raw provider error to the user —
-        // finish the run with a plain, tool-free answer instead.
-        result = await callModel(endpoint, auth, model, conversation, tools, false);
+        // finish the run with a plain, tool-free answer instead. The notice
+        // is only sent for this call, not added to `conversation` — it's a
+        // one-off instruction, not a real turn in the thread.
+        result = await callModel(
+          endpoint,
+          auth,
+          model,
+          [...conversation, TOOLS_UNAVAILABLE_NOTICE],
+          tools,
+          false,
+        );
         toolsUnavailable = true;
       }
     }

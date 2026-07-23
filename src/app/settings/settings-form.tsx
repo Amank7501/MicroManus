@@ -110,6 +110,14 @@ export default function SettingsForm({
         <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
           {providerInfo.id === "ollama" ? "Base URL" : "Endpoint"}
         </label>
+        {providerInfo.id === "ollama" && (
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            This app runs on our server, not your browser — a{" "}
+            <code className="rounded bg-black/[.05] px-1 py-0.5 dark:bg-white/[.08]">localhost</code>{" "}
+            or private-network URL won&apos;t be reachable. Use a public URL (a tunnel like ngrok
+            or Tailscale Funnel, or a port-forwarded address with a public hostname).
+          </p>
+        )}
         <input
           type="text"
           value={endpoint}

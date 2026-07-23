@@ -49,7 +49,7 @@ export const PROVIDERS: ProviderInfo[] = [
   },
   {
     id: "ollama",
-    label: "Ollama (self-hosted)",
+    label: "Ollama (local only — needs a public URL)",
     defaultEndpoint: "http://localhost:11434/v1",
     // No preset list — the user types whatever model they've pulled locally.
     models: [],
