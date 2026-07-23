@@ -1,4 +1,4 @@
-export type Provider = "openai" | "anthropic" | "moonshot";
+export type Provider = "openai" | "anthropic" | "moonshot" | "groq";
 
 export type ProviderInfo = {
   id: Provider;
@@ -29,6 +29,12 @@ export const PROVIDERS: ProviderInfo[] = [
     label: "Kimi (Moonshot AI)",
     defaultEndpoint: "https://api.moonshot.ai/v1",
     models: ["kimi-latest", "kimi-k2-0711-preview", "moonshot-v1-128k"],
+  },
+  {
+    id: "groq",
+    label: "Groq",
+    defaultEndpoint: "https://api.groq.com/openai/v1",
+    models: ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"],
   },
 ];
 

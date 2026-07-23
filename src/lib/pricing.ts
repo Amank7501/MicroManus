@@ -19,6 +19,10 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "kimi-latest": { input: 0.6, output: 2.5, cached: 0.15 },
   "kimi-k2-0711-preview": { input: 0.6, output: 2.5, cached: 0.15 },
   "moonshot-v1-128k": { input: 2, output: 5, cached: 0.5 },
+  // Groq doesn't publicly advertise a separate cached-token discount, so
+  // cached is set equal to input (no discount) rather than guessing one.
+  "llama-3.3-70b-versatile": { input: 0.59, output: 0.79, cached: 0.59 },
+  "openai/gpt-oss-120b": { input: 0.15, output: 0.75, cached: 0.15 },
 };
 
 const DEFAULT_PRICING: ModelPricing = { input: 0, output: 0, cached: 0 };
