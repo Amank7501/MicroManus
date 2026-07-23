@@ -73,70 +73,95 @@ export default async function StatsPage() {
   return (
     <div className="flex flex-1 flex-col items-center bg-zinc-50 px-4 py-12 font-sans dark:bg-black">
       <main className="flex w-full max-w-3xl flex-col gap-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold tracking-tight text-black dark:text-zinc-50">
-            Cost & usage
-          </h1>
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-black dark:text-zinc-50">
+              Cost & usage
+            </h1>
+            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+              Token usage and $ cost per chat, priced by each model's rates.
+            </p>
+          </div>
           <Link
             href="/dashboard"
-            className="text-sm font-medium text-zinc-600 underline underline-offset-4 dark:text-zinc-400"
+            className="shrink-0 text-sm font-medium text-zinc-600 underline underline-offset-4 dark:text-zinc-400"
           >
             Back to dashboard
           </Link>
         </div>
 
         {rows.length === 0 ? (
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            No usage yet — send a message in a chat to see costs here.
-          </p>
+          <div className="rounded-xl border border-dashed border-black/[.12] px-6 py-12 text-center dark:border-white/[.15]">
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+              No usage yet — send a message in a chat to see costs here.
+            </p>
+          </div>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-black/[.08] dark:border-white/[.145]">
-            <table className="w-full min-w-[560px] text-left text-sm">
+            <table className="w-full min-w-[560px] border-collapse text-sm tabular-nums">
               <thead>
-                <tr className="border-b border-black/[.08] text-zinc-500 dark:border-white/[.145] dark:text-zinc-400">
-                  <th className="px-4 py-3 font-medium">Chat</th>
-                  <th className="px-4 py-3 font-medium">Input</th>
-                  <th className="px-4 py-3 font-medium">Output</th>
-                  <th className="px-4 py-3 font-medium">Cached</th>
-                  <th className="px-4 py-3 font-medium">Cost</th>
+                <tr className="border-b border-black/[.08] dark:border-white/[.145]">
+                  <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Chat
+                  </th>
+                  <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Input
+                  </th>
+                  <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Output
+                  </th>
+                  <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Cached
+                  </th>
+                  <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    Cost
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
                   <tr
                     key={r.chatId}
-                    className="border-b border-black/[.05] last:border-0 dark:border-white/[.08]"
+                    className="border-b border-black/[.05] transition-colors last:border-0 hover:bg-black/[.02] dark:border-white/[.06] dark:hover:bg-white/[.03]"
                   >
-                    <td className="px-4 py-3">
+                    <td className="max-w-[220px] truncate px-4 py-3">
                       <Link
                         href={`/chat/${r.chatId}`}
-                        className="font-medium text-black underline underline-offset-4 dark:text-zinc-50"
+                        className="font-medium text-black underline decoration-black/20 underline-offset-4 hover:decoration-black/40 dark:text-zinc-50 dark:decoration-white/25 dark:hover:decoration-white/50"
                       >
                         {r.title}
                       </Link>
                     </td>
-                    <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
+                    <td className="px-4 py-3 text-right text-zinc-600 dark:text-zinc-400">
                       {formatTokens(r.input)}
                     </td>
-                    <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
+                    <td className="px-4 py-3 text-right text-zinc-600 dark:text-zinc-400">
                       {formatTokens(r.output)}
                     </td>
-                    <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
+                    <td className="px-4 py-3 text-right text-zinc-600 dark:text-zinc-400">
                       {formatTokens(r.cached)}
                     </td>
-                    <td className="px-4 py-3 font-medium text-black dark:text-zinc-50">
+                    <td className="px-4 py-3 text-right font-medium text-black dark:text-zinc-50">
                       {formatCost(r.cost)}
                     </td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
-                <tr className="border-t border-black/[.08] font-semibold dark:border-white/[.145]">
-                  <td className="px-4 py-3">Total</td>
-                  <td className="px-4 py-3">{formatTokens(totals.input)}</td>
-                  <td className="px-4 py-3">{formatTokens(totals.output)}</td>
-                  <td className="px-4 py-3">{formatTokens(totals.cached)}</td>
-                  <td className="px-4 py-3">{formatCost(totals.cost)}</td>
+                <tr className="border-t border-black/[.08] bg-black/[.02] font-semibold dark:border-white/[.145] dark:bg-white/[.03]">
+                  <td className="px-4 py-3 text-black dark:text-zinc-50">Total</td>
+                  <td className="px-4 py-3 text-right text-black dark:text-zinc-50">
+                    {formatTokens(totals.input)}
+                  </td>
+                  <td className="px-4 py-3 text-right text-black dark:text-zinc-50">
+                    {formatTokens(totals.output)}
+                  </td>
+                  <td className="px-4 py-3 text-right text-black dark:text-zinc-50">
+                    {formatTokens(totals.cached)}
+                  </td>
+                  <td className="px-4 py-3 text-right text-black dark:text-zinc-50">
+                    {formatCost(totals.cost)}
+                  </td>
                 </tr>
               </tfoot>
             </table>

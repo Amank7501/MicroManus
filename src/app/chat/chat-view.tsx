@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import NewChatButton from "./new-chat-button";
+import ToolStep from "./tool-step";
+import Markdown from "./markdown";
 
 type ToolCallInfo = { id: string; function: { name: string; arguments: string } };
 
@@ -35,26 +37,61 @@ type Props = {
   initialBalance: number;
 };
 
+type ToolStepData = {
+  kind: "search" | "pdf" | "unknown";
+  label: string;
+  status: "ok" | "error";
+};
+
 type FeedItem =
   | { type: "message"; created_at: string; message: Message }
-  | { type: "report"; created_at: string; report: ReportSummary };
+  | { type: "report"; created_at: string; report: ReportSummary }
+  | { type: "step"; created_at: string; key: string; step: ToolStepData };
 
-function searchQueryFrom(message: Message): string {
+function stepFromToolCall(call: ToolCallInfo, toolMessage: Message | undefined): ToolStepData {
+  let args: Record<string, unknown> = {};
   try {
-    const args = message.tool_calls?.[0]?.function.arguments ?? "{}";
-    return JSON.parse(args).query ?? "";
+    args = JSON.parse(call.function.arguments || "{}");
   } catch {
-    return "";
+    // malformed arguments — fall through with an empty object
   }
-}
 
-function searchResultCountFrom(message: Message): number | null {
-  try {
-    const parsed = JSON.parse(message.content);
-    return Array.isArray(parsed) ? parsed.length : null;
-  } catch {
-    return null;
+  let result: unknown = null;
+  if (toolMessage) {
+    try {
+      result = JSON.parse(toolMessage.content);
+    } catch {
+      result = null;
+    }
   }
+
+  if (call.function.name === "web_search") {
+    const query = typeof args.query === "string" ? args.query : "";
+    if (!toolMessage) {
+      return { kind: "search", label: `Searching the web for “${query}”…`, status: "ok" };
+    }
+    if (Array.isArray(result)) {
+      const count = result.length;
+      return {
+        kind: "search",
+        label: `Searched the web for “${query}” — found ${count} result${count === 1 ? "" : "s"}`,
+        status: "ok",
+      };
+    }
+    return { kind: "search", label: `Search failed for “${query}”`, status: "error" };
+  }
+
+  if (call.function.name === "create_pdf_report") {
+    const title = typeof args.title === "string" && args.title ? args.title : "report";
+    const failed = Boolean(
+      result && typeof result === "object" && "error" in (result as Record<string, unknown>),
+    );
+    return failed
+      ? { kind: "pdf", label: `Could not generate the PDF — “${title}”`, status: "error" }
+      : { kind: "pdf", label: `Generated a PDF report — “${title}”`, status: "ok" };
+  }
+
+  return { kind: "unknown", label: call.function.name, status: "ok" };
 }
 
 export default function ChatView({
@@ -125,16 +162,39 @@ export default function ChatView({
     }
   }
 
-  const feed: FeedItem[] = [
-    ...messages
-      .filter((m) => m.role !== "system")
-      .map((message): FeedItem => ({ type: "message", created_at: message.created_at, message })),
-    ...reports.map((report): FeedItem => ({ type: "report", created_at: report.created_at, report })),
-  ].sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const toolMessagesById = new Map<string, Message>();
+  for (const m of messages) {
+    if (m.role === "tool" && m.tool_call_id) {
+      toolMessagesById.set(m.tool_call_id, m);
+    }
+  }
+
+  const feed: FeedItem[] = [];
+  for (const m of messages) {
+    if (m.role === "system" || m.role === "tool") continue;
+
+    if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+      for (const call of m.tool_calls) {
+        feed.push({
+          type: "step",
+          created_at: m.created_at,
+          key: call.id,
+          step: stepFromToolCall(call, toolMessagesById.get(call.id)),
+        });
+      }
+      continue;
+    }
+
+    feed.push({ type: "message", created_at: m.created_at, message: m });
+  }
+  for (const report of reports) {
+    feed.push({ type: "report", created_at: report.created_at, report });
+  }
+  feed.sort((a, b) => a.created_at.localeCompare(b.created_at));
 
   return (
     <div className="flex h-dvh flex-1 bg-zinc-50 font-sans dark:bg-black">
-      <aside className="flex w-64 shrink-0 flex-col gap-3 border-r border-black/[.08] p-4 dark:border-white/[.145]">
+      <aside className="flex w-72 shrink-0 flex-col gap-4 border-r border-black/[.08] p-4 dark:border-white/[.145]">
         <div className="flex items-center justify-between">
           <Link
             href="/dashboard"
@@ -146,13 +206,16 @@ export default function ChatView({
             {balance} credit{balance === 1 ? "" : "s"}
           </span>
         </div>
+
         <NewChatButton />
+
         <div className="flex flex-1 flex-col gap-1 overflow-y-auto">
+          <p className="px-3 pb-1 text-xs font-medium text-zinc-400 dark:text-zinc-500">Chats</p>
           {chats.map((chat) => (
             <Link
               key={chat.id}
               href={`/chat/${chat.id}`}
-              className={`truncate rounded-lg px-3 py-2 text-sm transition-colors ${
+              className={`truncate rounded-xl px-3 py-2 text-sm transition-colors ${
                 chat.id === activeChatId
                   ? "bg-black/[.06] font-medium text-black dark:bg-white/[.1] dark:text-zinc-50"
                   : "text-zinc-600 hover:bg-black/[.04] dark:text-zinc-400 dark:hover:bg-white/[.06]"
@@ -165,8 +228,8 @@ export default function ChatView({
       </aside>
 
       <div className="flex flex-1 flex-col">
-        <div className="flex-1 overflow-y-auto px-6 py-6">
-          <div className="mx-auto flex max-w-2xl flex-col gap-3">
+        <div className="flex-1 overflow-y-auto px-6 py-8">
+          <div className="mx-auto flex max-w-3xl flex-col gap-4">
             {feed.length === 0 && (
               <p className="text-center text-sm text-zinc-500 dark:text-zinc-500">
                 Ask a research question — I can search the web for current information and
@@ -179,9 +242,9 @@ export default function ChatView({
                   <a
                     key={`report-${item.report.id}`}
                     href={`/api/reports/${item.report.id}`}
-                    className="mr-auto flex items-center gap-2 rounded-xl border border-black/[.08] bg-white px-4 py-3 text-sm transition-colors hover:bg-black/[.03] dark:border-white/[.145] dark:bg-zinc-900 dark:hover:bg-white/[.06]"
+                    className="mr-auto flex items-center gap-2.5 rounded-xl border border-black/[.08] bg-white px-4 py-3 text-sm transition-colors hover:bg-black/[.03] dark:border-white/[.145] dark:bg-zinc-900 dark:hover:bg-white/[.06]"
                   >
-                    <span>📄</span>
+                    <span aria-hidden>📄</span>
                     <span className="font-medium text-black dark:text-zinc-50">
                       {item.report.title}
                     </span>
@@ -192,41 +255,41 @@ export default function ChatView({
                 );
               }
 
-              const m = item.message;
-
-              if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
-                const query = searchQueryFrom(m);
-                return (
-                  <div key={m.id} className="mr-auto text-xs italic text-zinc-500 dark:text-zinc-400">
-                    🔍 Searching the web for “{query}”…
-                  </div>
-                );
+              if (item.type === "step") {
+                return <ToolStep key={item.key} {...item.step} />;
               }
 
-              if (m.role === "tool") {
-                const count = searchResultCountFrom(m);
+              const m = item.message;
+
+              if (m.role === "user") {
                 return (
-                  <div key={m.id} className="mr-auto text-xs italic text-zinc-500 dark:text-zinc-400">
-                    {count !== null ? `✅ Found ${count} result${count === 1 ? "" : "s"}` : "⚠️ Search failed"}
+                  <div
+                    key={m.id}
+                    className="ml-auto max-w-[75%] whitespace-pre-wrap rounded-2xl bg-foreground px-4 py-2.5 text-sm text-background"
+                  >
+                    {m.content}
                   </div>
                 );
               }
 
               return (
-                <div
-                  key={m.id}
-                  className={`max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm ${
-                    m.role === "user"
-                      ? "ml-auto bg-foreground text-background"
-                      : "mr-auto bg-black/[.05] text-black dark:bg-white/[.08] dark:text-zinc-50"
-                  }`}
-                >
-                  {m.content}
+                <div key={m.id} className="mr-auto w-full">
+                  <div className="mb-1.5 flex items-center gap-2">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-foreground text-[10px] font-medium text-background">
+                      M
+                    </span>
+                    <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                      MicroManus
+                    </span>
+                  </div>
+                  <div className="pl-7 text-black dark:text-zinc-50">
+                    <Markdown content={m.content} />
+                  </div>
                 </div>
               );
             })}
             {sending && (
-              <div className="mr-auto max-w-[80%] rounded-2xl bg-black/[.05] px-4 py-2.5 text-sm text-zinc-500 dark:bg-white/[.08] dark:text-zinc-400">
+              <div className="mr-auto flex items-center gap-2 pl-7 text-sm text-zinc-500 dark:text-zinc-400">
                 Thinking…
               </div>
             )}
@@ -235,26 +298,26 @@ export default function ChatView({
         </div>
 
         {error && (
-          <div className="mx-auto w-full max-w-2xl px-6">
+          <div className="mx-auto w-full max-w-3xl px-6">
             <p className="mb-2 text-sm text-red-600 dark:text-red-400">{error}</p>
           </div>
         )}
 
         {warning && (
-          <div className="mx-auto w-full max-w-2xl px-6">
+          <div className="mx-auto w-full max-w-3xl px-6">
             <p className="mb-2 text-sm text-amber-600 dark:text-amber-400">⚠️ {warning}</p>
           </div>
         )}
 
         {balance <= 0 && (
-          <div className="mx-auto w-full max-w-2xl px-6">
+          <div className="mx-auto w-full max-w-3xl px-6">
             <p className="mb-2 text-sm text-zinc-600 dark:text-zinc-400">
               You&apos;re out of credits — more ways to add credits are coming soon.
             </p>
           </div>
         )}
 
-        <form onSubmit={handleSend} className="mx-auto flex w-full max-w-2xl gap-2 px-6 pb-6">
+        <form onSubmit={handleSend} className="mx-auto flex w-full max-w-3xl gap-2 px-6 pb-6">
           <input
             type="text"
             value={input}

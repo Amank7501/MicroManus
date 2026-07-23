@@ -31,7 +31,7 @@ function LoginForm() {
   }
 
   return (
-    <main className="flex w-full max-w-sm flex-col items-center gap-6 text-center">
+    <main className="flex w-full max-w-sm flex-col items-center gap-6 rounded-2xl border border-black/[.08] bg-white p-6 text-center dark:border-white/[.145] dark:bg-zinc-950">
       <div>
         <h1 className="text-3xl font-semibold tracking-tight text-black dark:text-zinc-50">
           Sign in to MicroManus
@@ -65,7 +65,7 @@ function LoginForm() {
 
 export default function LoginPage() {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center bg-zinc-50 font-sans dark:bg-black">
+    <div className="flex flex-1 flex-col items-center justify-center bg-zinc-50 px-4 font-sans dark:bg-black">
       <Suspense fallback={null}>
         <LoginForm />
       </Suspense>
