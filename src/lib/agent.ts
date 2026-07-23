@@ -12,23 +12,32 @@ export type AgentMessage =
   | { role: "assistant"; content: string; tool_calls?: ToolCall[] }
   | { role: "tool"; content: string; tool_call_id: string };
 
-const TOOLS = [
-  {
-    type: "function",
-    function: {
-      name: "web_search",
-      description:
-        "Search the web for current information, news, statistics, or facts you are not confident about. Returns a list of results with title, url, and a content snippet.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "The search query" },
-        },
-        required: ["query"],
+export type ToolDefinition = {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+};
+
+export type ToolExecutor = (args: Record<string, unknown>) => Promise<string>;
+
+const WEB_SEARCH_TOOL: ToolDefinition = {
+  type: "function",
+  function: {
+    name: "web_search",
+    description:
+      "Search the web for current information, news, statistics, or facts you are not confident about. Returns a list of results with title, url, and a content snippet.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The search query" },
       },
+      required: ["query"],
     },
   },
-];
+};
 
 // One iteration = one model call. A tool-call round and the forced final
 // answer each consume one, so this allows a few searches before wrapping up.
@@ -39,6 +48,7 @@ async function callModel(
   apiKey: string,
   model: string,
   messages: AgentMessage[],
+  tools: ToolDefinition[],
   allowTools: boolean,
 ): Promise<
   | { ok: true; message: { content: string | null; tool_calls?: ToolCall[] } }
@@ -59,7 +69,7 @@ async function callModel(
         model,
         messages,
         max_tokens: 2048,
-        ...(allowTools ? { tools: TOOLS, tool_choice: "auto" } : { tool_choice: "none" }),
+        ...(allowTools ? { tools, tool_choice: "auto" } : { tool_choice: "none" }),
       }),
       signal: controller.signal,
     });
@@ -86,21 +96,51 @@ async function callModel(
   }
 }
 
+async function executeTool(
+  name: string,
+  args: Record<string, unknown>,
+  extraExecutors: Record<string, ToolExecutor>,
+): Promise<string> {
+  if (name === "web_search") {
+    const query = typeof args.query === "string" ? args.query : "";
+    try {
+      const results = await webSearch(query);
+      return JSON.stringify(results);
+    } catch (err) {
+      return JSON.stringify({ error: err instanceof Error ? err.message : "Search failed" });
+    }
+  }
+
+  const executor = extraExecutors[name];
+  if (!executor) {
+    return JSON.stringify({ error: `Unknown tool: ${name}` });
+  }
+
+  try {
+    return await executor(args);
+  } catch (err) {
+    return JSON.stringify({ error: err instanceof Error ? err.message : "Tool failed" });
+  }
+}
+
 export async function runAgent(
   endpoint: string,
   apiKey: string,
   model: string,
   priorMessages: AgentMessage[],
+  extraTools: ToolDefinition[] = [],
+  extraExecutors: Record<string, ToolExecutor> = {},
 ): Promise<
   | { ok: true; newMessages: AgentMessage[] }
   | { ok: false; message: string; newMessages: AgentMessage[] }
 > {
+  const tools = [WEB_SEARCH_TOOL, ...extraTools];
   const conversation: AgentMessage[] = [...priorMessages];
   const startLength = conversation.length;
 
   for (let i = 0; i < MAX_STEPS; i++) {
     const forceFinal = i === MAX_STEPS - 1;
-    const result = await callModel(endpoint, apiKey, model, conversation, !forceFinal);
+    const result = await callModel(endpoint, apiKey, model, conversation, tools, !forceFinal);
 
     if (!result.ok) {
       return { ok: false, message: result.message, newMessages: conversation.slice(startLength) };
@@ -121,21 +161,16 @@ export async function runAgent(
 
     const toolResults = await Promise.all(
       toolCalls.map(async (call) => {
-        let query = "";
+        let args: Record<string, unknown> = {};
         try {
-          query = JSON.parse(call.function.arguments || "{}").query ?? "";
+          args = JSON.parse(call.function.arguments || "{}");
         } catch {
-          // malformed arguments — search with an empty query below, which
-          // will just come back empty rather than crashing the loop.
+          // malformed arguments — the executor gets an empty object and
+          // will produce an error result rather than crashing the loop.
         }
 
-        try {
-          const results = await webSearch(query);
-          return { call, raw: JSON.stringify(results) };
-        } catch (err) {
-          const message = err instanceof Error ? err.message : "Search failed";
-          return { call, raw: JSON.stringify({ error: message }) };
-        }
+        const raw = await executeTool(call.function.name, args, extraExecutors);
+        return { call, raw };
       }),
     );
 

@@ -15,6 +15,12 @@ type Message = {
   created_at: string;
 };
 
+type ReportSummary = {
+  id: string;
+  title: string;
+  created_at: string;
+};
+
 type ChatSummary = {
   id: string;
   title: string;
@@ -25,8 +31,13 @@ type Props = {
   chats: ChatSummary[];
   activeChatId: string;
   initialMessages: Message[];
+  initialReports: ReportSummary[];
   initialBalance: number;
 };
+
+type FeedItem =
+  | { type: "message"; created_at: string; message: Message }
+  | { type: "report"; created_at: string; report: ReportSummary };
 
 function searchQueryFrom(message: Message): string {
   try {
@@ -46,8 +57,15 @@ function searchResultCountFrom(message: Message): number | null {
   }
 }
 
-export default function ChatView({ chats, activeChatId, initialMessages, initialBalance }: Props) {
+export default function ChatView({
+  chats,
+  activeChatId,
+  initialMessages,
+  initialReports,
+  initialBalance,
+}: Props) {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [reports, setReports] = useState<ReportSummary[]>(initialReports);
   const [balance, setBalance] = useState(initialBalance);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -56,7 +74,7 @@ export default function ChatView({ chats, activeChatId, initialMessages, initial
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, reports]);
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
@@ -86,9 +104,20 @@ export default function ChatView({ chats, activeChatId, initialMessages, initial
       ...(data.steps ?? []),
     ]);
 
+    if (data.reports && data.reports.length > 0) {
+      setReports((prev) => [...prev, ...data.reports]);
+    }
+
     if (typeof data.balance === "number") setBalance(data.balance);
     if (!res.ok) setError(data.error ?? "Something went wrong");
   }
+
+  const feed: FeedItem[] = [
+    ...messages
+      .filter((m) => m.role !== "system")
+      .map((message): FeedItem => ({ type: "message", created_at: message.created_at, message })),
+    ...reports.map((report): FeedItem => ({ type: "report", created_at: report.created_at, report })),
+  ].sort((a, b) => a.created_at.localeCompare(b.created_at));
 
   return (
     <div className="flex h-dvh flex-1 bg-zinc-50 font-sans dark:bg-black">
@@ -125,51 +154,63 @@ export default function ChatView({ chats, activeChatId, initialMessages, initial
       <div className="flex flex-1 flex-col">
         <div className="flex-1 overflow-y-auto px-6 py-6">
           <div className="mx-auto flex max-w-2xl flex-col gap-3">
-            {messages.length === 0 && (
+            {feed.length === 0 && (
               <p className="text-center text-sm text-zinc-500 dark:text-zinc-500">
                 Say something to start the conversation.
               </p>
             )}
-            {messages
-              .filter((m) => m.role !== "system")
-              .map((m) => {
-                if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
-                  const query = searchQueryFrom(m);
-                  return (
-                    <div
-                      key={m.id}
-                      className="mr-auto text-xs italic text-zinc-500 dark:text-zinc-400"
-                    >
-                      🔍 Searching the web for “{query}”…
-                    </div>
-                  );
-                }
-
-                if (m.role === "tool") {
-                  const count = searchResultCountFrom(m);
-                  return (
-                    <div
-                      key={m.id}
-                      className="mr-auto text-xs italic text-zinc-500 dark:text-zinc-400"
-                    >
-                      {count !== null ? `✅ Found ${count} result${count === 1 ? "" : "s"}` : "⚠️ Search failed"}
-                    </div>
-                  );
-                }
-
+            {feed.map((item) => {
+              if (item.type === "report") {
                 return (
-                  <div
-                    key={m.id}
-                    className={`max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm ${
-                      m.role === "user"
-                        ? "ml-auto bg-foreground text-background"
-                        : "mr-auto bg-black/[.05] text-black dark:bg-white/[.08] dark:text-zinc-50"
-                    }`}
+                  <a
+                    key={`report-${item.report.id}`}
+                    href={`/api/reports/${item.report.id}`}
+                    className="mr-auto flex items-center gap-2 rounded-xl border border-black/[.08] bg-white px-4 py-3 text-sm transition-colors hover:bg-black/[.03] dark:border-white/[.145] dark:bg-zinc-900 dark:hover:bg-white/[.06]"
                   >
-                    {m.content}
+                    <span>📄</span>
+                    <span className="font-medium text-black dark:text-zinc-50">
+                      {item.report.title}
+                    </span>
+                    <span className="text-zinc-500 underline underline-offset-4 dark:text-zinc-400">
+                      Download PDF
+                    </span>
+                  </a>
+                );
+              }
+
+              const m = item.message;
+
+              if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+                const query = searchQueryFrom(m);
+                return (
+                  <div key={m.id} className="mr-auto text-xs italic text-zinc-500 dark:text-zinc-400">
+                    🔍 Searching the web for “{query}”…
                   </div>
                 );
-              })}
+              }
+
+              if (m.role === "tool") {
+                const count = searchResultCountFrom(m);
+                return (
+                  <div key={m.id} className="mr-auto text-xs italic text-zinc-500 dark:text-zinc-400">
+                    {count !== null ? `✅ Found ${count} result${count === 1 ? "" : "s"}` : "⚠️ Search failed"}
+                  </div>
+                );
+              }
+
+              return (
+                <div
+                  key={m.id}
+                  className={`max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm ${
+                    m.role === "user"
+                      ? "ml-auto bg-foreground text-background"
+                      : "mr-auto bg-black/[.05] text-black dark:bg-white/[.08] dark:text-zinc-50"
+                  }`}
+                >
+                  {m.content}
+                </div>
+              );
+            })}
             {sending && (
               <div className="mr-auto max-w-[80%] rounded-2xl bg-black/[.05] px-4 py-2.5 text-sm text-zinc-500 dark:bg-white/[.08] dark:text-zinc-400">
                 Thinking…

@@ -50,11 +50,18 @@ export default async function ChatPage({
     .eq("chat_id", chatId)
     .order("seq", { ascending: true });
 
+  const { data: reports } = await supabase
+    .from("reports")
+    .select("id, title, created_at")
+    .eq("chat_id", chatId)
+    .order("created_at", { ascending: true });
+
   return (
     <ChatView
       chats={chats ?? []}
       activeChatId={chatId}
       initialMessages={messages ?? []}
+      initialReports={reports ?? []}
       initialBalance={credits.balance}
     />
   );

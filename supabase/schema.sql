@@ -115,3 +115,34 @@ alter table public.messages add constraint messages_role_check
 alter table public.messages add column if not exists tool_calls jsonb;
 alter table public.messages add column if not exists tool_call_id text;
 alter table public.messages add column if not exists seq bigserial;
+
+-- ===== Phase 6: PDF reports =====
+-- Private storage bucket — like api_keys, only the server (service role)
+-- ever reads or writes objects in it. If this insert fails on your Supabase
+-- version due to permissions, create the bucket manually instead: Storage →
+-- New bucket → name "reports" → Public bucket: OFF.
+
+insert into storage.buckets (id, name, public)
+values ('reports', 'reports', false)
+on conflict (id) do nothing;
+
+create table if not exists public.reports (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  chat_id uuid not null references public.chats (id) on delete cascade,
+  title text not null,
+  storage_path text not null,
+  created_at timestamptz not null default now()
+);
+
+alter table public.reports enable row level security;
+
+drop policy if exists "Users can view own reports" on public.reports;
+create policy "Users can view own reports"
+  on public.reports for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "Users can insert own reports" on public.reports;
+create policy "Users can insert own reports"
+  on public.reports for insert
+  with check (auth.uid() = user_id);
