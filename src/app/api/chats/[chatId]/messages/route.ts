@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import crypto from "node:crypto";
+import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decrypt } from "@/lib/crypto";
@@ -60,15 +60,6 @@ const PDF_TOOL: ToolDefinition = {
       required: ["title", "markdown"],
     },
   },
-};
-
-type MessageRow = {
-  id: string;
-  role: "user" | "assistant" | "system" | "tool";
-  content: string;
-  tool_calls: unknown;
-  tool_call_id: string | null;
-  created_at: string;
 };
 
 export async function POST(
@@ -183,114 +174,160 @@ export async function POST(
     }),
   ];
 
-  const createdReports: { id: string; title: string; created_at: string }[] = [];
+  const encoder = new TextEncoder();
 
-  async function createPdfReportExecutor(args: Record<string, unknown>): Promise<string> {
-    const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : "Report";
-    const markdown = typeof args.markdown === "string" ? args.markdown : "";
+  const stream = new ReadableStream({
+    async start(controller) {
+      function send(event: Record<string, unknown>) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+      }
 
-    const pdfBytes = await generateReportPdf(title, markdown);
-    const reportId = crypto.randomUUID();
-    const storagePath = `${userId}/${reportId}.pdf`;
+      send({ type: "user_message", message: userMessage });
 
-    const { error: uploadError } = await admin.storage
-      .from("reports")
-      .upload(storagePath, Buffer.from(pdfBytes), { contentType: "application/pdf" });
+      const createdReports: { id: string; title: string; created_at: string }[] = [];
 
-    if (uploadError) {
-      return JSON.stringify({ error: "Could not generate the PDF" });
-    }
+      async function createPdfReportExecutor(args: Record<string, unknown>): Promise<string> {
+        const title =
+          typeof args.title === "string" && args.title.trim() ? args.title.trim() : "Report";
+        const markdown = typeof args.markdown === "string" ? args.markdown : "";
 
-    const { data: reportRow, error: reportInsertError } = await supabase
-      .from("reports")
-      .insert({ id: reportId, user_id: userId, chat_id: chatId, title, storage_path: storagePath })
-      .select("id, title, created_at")
-      .single();
+        const pdfBytes = await generateReportPdf(title, markdown);
+        const reportId = crypto.randomUUID();
+        const storagePath = `${userId}/${reportId}.pdf`;
 
-    if (reportInsertError || !reportRow) {
-      return JSON.stringify({ error: "Could not save the report" });
-    }
+        const { error: uploadError } = await admin.storage
+          .from("reports")
+          .upload(storagePath, Buffer.from(pdfBytes), { contentType: "application/pdf" });
 
-    createdReports.push(reportRow);
-    return JSON.stringify({ status: "created", reportId: reportRow.id, title: reportRow.title });
-  }
+        if (uploadError) {
+          return JSON.stringify({ error: "Could not generate the PDF" });
+        }
 
-  const agentResult = await runAgent(
-    keyRow.endpoint,
-    auth,
-    keyRow.selected_model,
-    priorMessages,
-    [PDF_TOOL],
-    { create_pdf_report: createPdfReportExecutor },
-  );
+        const { data: reportRow, error: reportInsertError } = await supabase
+          .from("reports")
+          .insert({ id: reportId, user_id: userId, chat_id: chatId, title, storage_path: storagePath })
+          .select("id, title, created_at")
+          .single();
 
-  const persisted: MessageRow[] = [];
-  for (const step of agentResult.newMessages) {
-    const msg = step.message;
-    const { data: row } = await supabase
-      .from("messages")
-      .insert({
-        chat_id: chatId,
-        role: msg.role,
-        content: msg.content,
-        tool_calls: "tool_calls" in msg ? (msg.tool_calls ?? null) : null,
-        tool_call_id: msg.role === "tool" ? msg.tool_call_id : null,
-      })
-      .select("id, role, content, tool_calls, tool_call_id, created_at")
-      .single();
+        if (reportInsertError || !reportRow) {
+          return JSON.stringify({ error: "Could not save the report" });
+        }
 
-    if (row) persisted.push(row);
+        createdReports.push(reportRow);
+        send({ type: "report", report: reportRow });
+        return JSON.stringify({ status: "created", reportId: reportRow.id, title: reportRow.title });
+      }
 
-    if (row && msg.role === "assistant" && step.usage) {
-      const { input, output, cached } = step.usage;
-      const cost = computeCost(keyRow.selected_model, input, output, cached);
-      await supabase.from("usage").insert({
-        message_id: row.id,
-        chat_id: chatId,
-        user_id: userId,
-        model: keyRow.selected_model,
-        input_tokens: input,
-        output_tokens: output,
-        cached_tokens: cached,
-        cost,
+      let toolsWereUnavailable = false;
+      let runFailed = false;
+
+      try {
+        for await (const event of runAgent(
+          keyRow.endpoint,
+          auth,
+          keyRow.selected_model,
+          priorMessages,
+          [PDF_TOOL],
+          { create_pdf_report: createPdfReportExecutor },
+        )) {
+          if (event.type === "token") {
+            send({ type: "token", content: event.content });
+            continue;
+          }
+
+          if (event.type === "error") {
+            runFailed = true;
+            send({ type: "error", error: event.message });
+            continue;
+          }
+
+          // event.type === "message" — persist it, then forward the
+          // persisted row (with its real id/created_at) to the client.
+          const msg = event.step.message;
+          const { data: row } = await supabase
+            .from("messages")
+            .insert({
+              chat_id: chatId,
+              role: msg.role,
+              content: msg.content,
+              tool_calls: "tool_calls" in msg ? (msg.tool_calls ?? null) : null,
+              tool_call_id: msg.role === "tool" ? msg.tool_call_id : null,
+            })
+            .select("id, role, content, tool_calls, tool_call_id, created_at")
+            .single();
+
+          if (row && msg.role === "assistant" && event.step.usage) {
+            const { input, output, cached } = event.step.usage;
+            const cost = computeCost(keyRow.selected_model, input, output, cached);
+            await supabase.from("usage").insert({
+              message_id: row.id,
+              chat_id: chatId,
+              user_id: userId,
+              model: keyRow.selected_model,
+              input_tokens: input,
+              output_tokens: output,
+              cached_tokens: cached,
+              cost,
+            });
+          }
+
+          if (event.step.toolsUnavailable) {
+            toolsWereUnavailable = true;
+          }
+
+          send({
+            type: "message",
+            message: row ?? {
+              id: crypto.randomUUID(),
+              role: msg.role,
+              content: msg.content,
+              tool_calls: "tool_calls" in msg ? (msg.tool_calls ?? null) : null,
+              tool_call_id: msg.role === "tool" ? msg.tool_call_id : null,
+              created_at: new Date().toISOString(),
+            },
+          });
+        }
+      } catch (err) {
+        runFailed = true;
+        send({
+          type: "error",
+          error: err instanceof Error ? err.message : "Unexpected error",
+        });
+      }
+
+      let newBalance = credits.balance;
+      if (!runFailed) {
+        const { data: freshCredits } = await admin
+          .from("credits")
+          .select("balance")
+          .eq("user_id", userId)
+          .maybeSingle();
+
+        newBalance = Math.max((freshCredits?.balance ?? credits.balance) - 1, 0);
+        await admin
+          .from("credits")
+          .update({ balance: newBalance, updated_at: new Date().toISOString() })
+          .eq("user_id", userId);
+      }
+
+      send({
+        type: "done",
+        balance: newBalance,
+        warning: toolsWereUnavailable
+          ? "Tools (like web search) were temporarily unavailable, so this answer was generated without them."
+          : undefined,
       });
-    }
-  }
 
-  if (!agentResult.ok) {
-    return NextResponse.json(
-      {
-        userMessage,
-        steps: persisted,
-        reports: createdReports,
-        error: agentResult.message,
-        balance: credits.balance,
-      },
-      { status: 502 },
-    );
-  }
+      controller.close();
+    },
+  });
 
-  const { data: freshCredits } = await admin
-    .from("credits")
-    .select("balance")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  const newBalance = Math.max((freshCredits?.balance ?? credits.balance) - 1, 0);
-  await admin
-    .from("credits")
-    .update({ balance: newBalance, updated_at: new Date().toISOString() })
-    .eq("user_id", user.id);
-
-  const toolsWereUnavailable = agentResult.newMessages.some((step) => step.toolsUnavailable);
-
-  return NextResponse.json({
-    userMessage,
-    steps: persisted,
-    reports: createdReports,
-    balance: newBalance,
-    warning: toolsWereUnavailable
-      ? "Tools (like web search) were temporarily unavailable, so this answer was generated without them."
-      : undefined,
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
   });
 }

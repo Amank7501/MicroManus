@@ -48,6 +48,10 @@ type FeedItem =
   | { type: "report"; created_at: string; report: ReportSummary }
   | { type: "step"; created_at: string; key: string; step: ToolStepData };
 
+function hasToolCalls(m: Message): boolean {
+  return Boolean(m.tool_calls && m.tool_calls.length > 0);
+}
+
 function stepFromToolCall(call: ToolCallInfo, toolMessage: Message | undefined): ToolStepData {
   let args: Record<string, unknown> = {};
   try {
@@ -83,6 +87,9 @@ function stepFromToolCall(call: ToolCallInfo, toolMessage: Message | undefined):
 
   if (call.function.name === "create_pdf_report") {
     const title = typeof args.title === "string" && args.title ? args.title : "report";
+    if (!toolMessage) {
+      return { kind: "pdf", label: `Generating a PDF report — “${title}”…`, status: "ok" };
+    }
     const failed = Boolean(
       result && typeof result === "object" && "error" in (result as Record<string, unknown>),
     );
@@ -106,13 +113,14 @@ export default function ChatView({
   const [balance, setBalance] = useState(initialBalance);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [streamingContent, setStreamingContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, reports]);
+  }, [messages, reports, streamingContent]);
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
@@ -122,6 +130,7 @@ export default function ChatView({
     setError(null);
     setWarning(null);
     setSending(true);
+    setStreamingContent(null);
     setInput("");
 
     const tempId = `temp-${Date.now()}`;
@@ -130,34 +139,94 @@ export default function ChatView({
       { id: tempId, role: "user", content, created_at: new Date().toISOString() },
     ]);
 
+    let receivedAnyEvent = false;
+
     try {
       const res = await fetch(`/api/chats/${activeChatId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content }),
       });
-      const data = await res.json();
-      setSending(false);
 
-      setMessages((prev) => [
-        ...prev.map((m) => (m.id === tempId ? data.userMessage ?? m : m)),
-        ...(data.steps ?? []),
-      ]);
+      const isStream = res.headers.get("content-type")?.includes("text/event-stream");
 
-      if (data.reports && data.reports.length > 0) {
-        setReports((prev) => [...prev, ...data.reports]);
+      if (!isStream) {
+        // Early-exit error path (auth/validation/credits/missing key/etc.)
+        // — a plain JSON error response, same shape as before streaming.
+        const data = await res.json().catch(() => ({}));
+        setSending(false);
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        setInput(content);
+        setError(data.error ?? "Something went wrong");
+        return;
       }
 
-      if (typeof data.balance === "number") setBalance(data.balance);
-      if (!res.ok) setError(data.error ?? "Something went wrong");
-      if (data.warning) setWarning(data.warning);
-    } catch {
-      // Network failure, or a non-JSON response (e.g. a platform timeout
-      // page). Don't leave the UI stuck on "Thinking…" forever — drop the
-      // optimistic message, restore the draft, and let the user retry.
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let boundary: number;
+        while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+          const rawEvent = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+
+          for (const line of rawEvent.split("\n")) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) continue;
+            const payload = trimmed.slice(5).trim();
+            if (!payload) continue;
+
+            let event: Record<string, unknown>;
+            try {
+              event = JSON.parse(payload);
+            } catch {
+              continue;
+            }
+            receivedAnyEvent = true;
+
+            if (event.type === "user_message") {
+              const msg = event.message as Message;
+              setMessages((prev) => prev.map((m) => (m.id === tempId ? msg : m)));
+            } else if (event.type === "token") {
+              setStreamingContent((prev) => (prev ?? "") + (event.content as string));
+            } else if (event.type === "message") {
+              const msg = event.message as Message;
+              setMessages((prev) => [...prev, msg]);
+              if (msg.role === "assistant" && !hasToolCalls(msg)) {
+                setStreamingContent(null);
+              }
+            } else if (event.type === "report") {
+              setReports((prev) => [...prev, event.report as ReportSummary]);
+            } else if (event.type === "error") {
+              setError(event.error as string);
+            } else if (event.type === "done") {
+              setSending(false);
+              setStreamingContent(null);
+              if (typeof event.balance === "number") setBalance(event.balance);
+              if (event.warning) setWarning(event.warning as string);
+            }
+          }
+        }
+      }
+
       setSending(false);
-      setMessages((prev) => prev.filter((m) => m.id !== tempId));
-      setInput(content);
+      setStreamingContent(null);
+    } catch {
+      // Network failure, or the connection dropped mid-stream. Don't leave
+      // the UI stuck forever — if nothing came back at all, treat it like
+      // the send never happened; if we're mid-run, just surface the error
+      // and leave what's already arrived in place.
+      setSending(false);
+      setStreamingContent(null);
+      if (!receivedAnyEvent) {
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        setInput(content);
+      }
       setError("Couldn't reach the server. Check your connection and try again.");
     }
   }
@@ -173,8 +242,8 @@ export default function ChatView({
   for (const m of messages) {
     if (m.role === "system" || m.role === "tool") continue;
 
-    if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
-      for (const call of m.tool_calls) {
+    if (m.role === "assistant" && hasToolCalls(m)) {
+      for (const call of m.tool_calls!) {
         feed.push({
           type: "step",
           created_at: m.created_at,
@@ -191,6 +260,9 @@ export default function ChatView({
     feed.push({ type: "report", created_at: report.created_at, report });
   }
   feed.sort((a, b) => a.created_at.localeCompare(b.created_at));
+
+  const isThinking =
+    sending && streamingContent === null && messages[messages.length - 1]?.role === "user";
 
   return (
     <div className="flex h-dvh flex-1 bg-zinc-50 font-sans dark:bg-black">
@@ -230,7 +302,7 @@ export default function ChatView({
       <div className="flex flex-1 flex-col">
         <div className="flex-1 overflow-y-auto px-6 py-8">
           <div className="mx-auto flex max-w-3xl flex-col gap-4">
-            {feed.length === 0 && (
+            {feed.length === 0 && streamingContent === null && (
               <p className="text-center text-sm text-zinc-500 dark:text-zinc-500">
                 Ask a research question — I can search the web for current information and
                 put together a downloadable PDF report if you ask for one.
@@ -288,7 +360,22 @@ export default function ChatView({
                 </div>
               );
             })}
-            {sending && (
+            {streamingContent !== null && (
+              <div className="mr-auto w-full">
+                <div className="mb-1.5 flex items-center gap-2">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-foreground text-[10px] font-medium text-background">
+                    M
+                  </span>
+                  <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                    MicroManus
+                  </span>
+                </div>
+                <div className="pl-7 text-black dark:text-zinc-50">
+                  <Markdown content={streamingContent} />
+                </div>
+              </div>
+            )}
+            {isThinking && (
               <div className="mr-auto flex items-center gap-2 pl-7 text-sm text-zinc-500 dark:text-zinc-400">
                 Thinking…
               </div>

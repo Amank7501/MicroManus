@@ -29,6 +29,17 @@ export type AgentStep = {
   toolsUnavailable?: boolean;
 };
 
+// Emitted live as the run progresses. "token" is a content delta for the
+// in-progress final answer (never emitted for tool-call turns — see the
+// streaming-mode note on callModel). "message" is a fully-formed, ready-to-
+// persist turn (an assistant tool-call turn, a tool result, or the final
+// answer) — callers should persist each one as it arrives rather than
+// batching until the run ends. "error" ends the run without a "message".
+export type AgentEvent =
+  | { type: "token"; content: string }
+  | { type: "message"; step: AgentStep }
+  | { type: "error"; message: string };
+
 export type ToolDefinition = {
   type: "function";
   function: {
@@ -89,17 +100,59 @@ function parseUsage(data: Record<string, unknown> | null): Usage | undefined {
   };
 }
 
-async function callModel(
+// Parses an SSE byte stream from the provider into individual JSON chunk
+// objects, one per `data: {...}` line, stopping at the `[DONE]` sentinel.
+// Handles chunk boundaries that split mid-line by buffering the remainder.
+async function* readSseChunks(body: ReadableStream<Uint8Array>): AsyncGenerator<Record<string, unknown>> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let boundary: number;
+      while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+        const rawEvent = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+
+        for (const line of rawEvent.split("\n")) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const payload = trimmed.slice(5).trim();
+          if (payload === "[DONE]") return;
+          try {
+            yield JSON.parse(payload);
+          } catch {
+            // malformed chunk — skip it rather than aborting the whole stream
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+type CallResult =
+  | { ok: true; message: { content: string | null; tool_calls?: ToolCall[] }; usage?: Usage }
+  | { ok: false; message: string };
+
+// Streams one model turn. Yields a "token" event for each content delta as
+// it arrives (final-answer turns only — a turn that calls a tool produces no
+// content to stream, so nothing is yielded until the tool_calls are fully
+// assembled) and returns the completed turn once the provider's stream ends.
+async function* callModel(
   endpoint: string,
   auth: ConnectionAuth,
   model: string,
   messages: AgentMessage[],
   tools: ToolDefinition[],
   allowTools: boolean,
-): Promise<
-  | { ok: true; message: { content: string | null; tool_calls?: ToolCall[] }; usage?: Usage }
-  | { ok: false; message: string }
-> {
+): AsyncGenerator<{ type: "token"; content: string }, CallResult, void> {
   const base = endpoint.replace(/\/+$/, "");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60000);
@@ -115,6 +168,8 @@ async function callModel(
         model,
         messages,
         max_tokens: 2048,
+        stream: true,
+        stream_options: { include_usage: true },
         // `tool_choice` is only valid when `tools` is also present — some
         // providers (OpenAI included) reject "tool_choice: none" on its
         // own with "'tool_choice' is only allowed when 'tools' are
@@ -125,20 +180,67 @@ async function callModel(
       signal: controller.signal,
     });
 
-    const data = await res.json().catch(() => null);
-
     if (!res.ok) {
+      const data = await res.json().catch(() => null);
       const message =
         data?.error?.message ?? data?.message ?? `Request failed with status ${res.status}`;
       return { ok: false, message: String(message).slice(0, 500) };
     }
 
-    const message = data?.choices?.[0]?.message;
-    if (!message) {
+    if (!res.body) {
       return { ok: false, message: "Model returned an empty response" };
     }
 
-    return { ok: true, message, usage: parseUsage(data) };
+    // A turn is either all content deltas or all tool_calls deltas in every
+    // provider's real-world behavior (never both) — decided by whichever
+    // arrives first, so we know whether to stream tokens live or accumulate
+    // tool-call arguments silently until they're complete enough to parse.
+    let mode: "unknown" | "content" | "tool_calls" = "unknown";
+    let contentBuffer = "";
+    const toolCallsAcc: { id?: string; name?: string; args: string }[] = [];
+    let usage: Usage | undefined;
+
+    for await (const chunk of readSseChunks(res.body)) {
+      const choice = (chunk.choices as Array<Record<string, unknown>> | undefined)?.[0];
+      const delta = choice?.delta as Record<string, unknown> | undefined;
+      const deltaToolCalls = delta?.tool_calls as
+        | Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>
+        | undefined;
+
+      if (deltaToolCalls) {
+        if (mode === "unknown") mode = "tool_calls";
+        for (const entry of deltaToolCalls) {
+          const idx = entry.index ?? 0;
+          toolCallsAcc[idx] ??= { args: "" };
+          if (entry.id) toolCallsAcc[idx].id = entry.id;
+          if (entry.function?.name) toolCallsAcc[idx].name = entry.function.name;
+          if (entry.function?.arguments) toolCallsAcc[idx].args += entry.function.arguments;
+        }
+      } else if (typeof delta?.content === "string" && delta.content.length > 0) {
+        if (mode === "unknown") mode = "content";
+        if (mode === "content") {
+          contentBuffer += delta.content;
+          yield { type: "token", content: delta.content };
+        }
+      }
+
+      if (chunk.usage) {
+        usage = parseUsage(chunk);
+      }
+    }
+
+    if (mode === "tool_calls" && toolCallsAcc.length > 0) {
+      const toolCalls: ToolCall[] = toolCallsAcc
+        .filter((c) => c.id && c.name)
+        .map((c) => ({
+          id: c.id!,
+          type: "function",
+          function: { name: c.name!, arguments: c.args },
+        }));
+      return { ok: true, message: { content: contentBuffer || null, tool_calls: toolCalls }, usage };
+    }
+
+    return { ok: true, message: { content: contentBuffer }, usage };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Request failed";
     return { ok: false, message: message.slice(0, 500) };
@@ -174,27 +276,21 @@ async function executeTool(
   }
 }
 
-export async function runAgent(
+export async function* runAgent(
   endpoint: string,
   auth: ConnectionAuth,
   model: string,
   priorMessages: AgentMessage[],
   extraTools: ToolDefinition[] = [],
   extraExecutors: Record<string, ToolExecutor> = {},
-): Promise<
-  | { ok: true; newMessages: AgentStep[] }
-  | { ok: false; message: string; newMessages: AgentStep[] }
-> {
+): AsyncGenerator<AgentEvent, void> {
   const tools = [WEB_SEARCH_TOOL, ...extraTools];
-  // `conversation` is the clean, wire-format history replayed to the
-  // provider. `steps` mirrors every entry appended beyond priorMessages,
-  // pairing it with usage where applicable — this is what callers persist.
+  // The clean, wire-format history replayed to the provider.
   const conversation: AgentMessage[] = [...priorMessages];
-  const steps: AgentStep[] = [];
 
   for (let i = 0; i < MAX_STEPS; i++) {
     const forceFinal = i === MAX_STEPS - 1;
-    let result = await callModel(endpoint, auth, model, conversation, tools, !forceFinal);
+    let result = yield* callModel(endpoint, auth, model, conversation, tools, !forceFinal);
     let toolsUnavailable = false;
 
     if (!result.ok && !forceFinal) {
@@ -202,14 +298,14 @@ export async function runAgent(
       // intermittently reject a turn with a tool-call validation error
       // when the model produces malformed tool-call output. Retry once —
       // it's often transient — before giving up on tools for this turn.
-      result = await callModel(endpoint, auth, model, conversation, tools, true);
+      result = yield* callModel(endpoint, auth, model, conversation, tools, true);
 
       if (!result.ok) {
         // Still failing. Don't surface a raw provider error to the user —
         // finish the run with a plain, tool-free answer instead. The notice
         // is only sent for this call, not added to `conversation` — it's a
         // one-off instruction, not a real turn in the thread.
-        result = await callModel(
+        result = yield* callModel(
           endpoint,
           auth,
           model,
@@ -222,7 +318,8 @@ export async function runAgent(
     }
 
     if (!result.ok) {
-      return { ok: false, message: result.message, newMessages: steps };
+      yield { type: "error", message: result.message };
+      return;
     }
 
     const toolCalls = toolsUnavailable ? [] : (result.message.tool_calls ?? []);
@@ -233,8 +330,8 @@ export async function runAgent(
         content: result.message.content ?? "",
       };
       conversation.push(assistantMessage);
-      steps.push({ message: assistantMessage, usage: result.usage, toolsUnavailable });
-      return { ok: true, newMessages: steps };
+      yield { type: "message", step: { message: assistantMessage, usage: result.usage, toolsUnavailable } };
+      return;
     }
 
     const assistantMessage: AgentMessage = {
@@ -243,7 +340,7 @@ export async function runAgent(
       tool_calls: toolCalls,
     };
     conversation.push(assistantMessage);
-    steps.push({ message: assistantMessage, usage: result.usage });
+    yield { type: "message", step: { message: assistantMessage, usage: result.usage } };
 
     const toolResults = await Promise.all(
       toolCalls.map(async (call) => {
@@ -263,13 +360,12 @@ export async function runAgent(
     for (const { call, raw } of toolResults) {
       const toolMessage: AgentMessage = { role: "tool", tool_call_id: call.id, content: raw };
       conversation.push(toolMessage);
-      steps.push({ message: toolMessage });
+      yield { type: "message", step: { message: toolMessage } };
     }
   }
 
-  return {
-    ok: false,
+  yield {
+    type: "error",
     message: "The agent could not reach a final answer within the step limit.",
-    newMessages: steps,
   };
 }
