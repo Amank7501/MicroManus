@@ -93,26 +93,36 @@ export default function ChatView({
       { id: tempId, role: "user", content, created_at: new Date().toISOString() },
     ]);
 
-    const res = await fetch(`/api/chats/${activeChatId}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
-    });
-    const data = await res.json();
-    setSending(false);
+    try {
+      const res = await fetch(`/api/chats/${activeChatId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+      const data = await res.json();
+      setSending(false);
 
-    setMessages((prev) => [
-      ...prev.map((m) => (m.id === tempId ? data.userMessage ?? m : m)),
-      ...(data.steps ?? []),
-    ]);
+      setMessages((prev) => [
+        ...prev.map((m) => (m.id === tempId ? data.userMessage ?? m : m)),
+        ...(data.steps ?? []),
+      ]);
 
-    if (data.reports && data.reports.length > 0) {
-      setReports((prev) => [...prev, ...data.reports]);
+      if (data.reports && data.reports.length > 0) {
+        setReports((prev) => [...prev, ...data.reports]);
+      }
+
+      if (typeof data.balance === "number") setBalance(data.balance);
+      if (!res.ok) setError(data.error ?? "Something went wrong");
+      if (data.warning) setWarning(data.warning);
+    } catch {
+      // Network failure, or a non-JSON response (e.g. a platform timeout
+      // page). Don't leave the UI stuck on "Thinking…" forever — drop the
+      // optimistic message, restore the draft, and let the user retry.
+      setSending(false);
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      setInput(content);
+      setError("Couldn't reach the server. Check your connection and try again.");
     }
-
-    if (typeof data.balance === "number") setBalance(data.balance);
-    if (!res.ok) setError(data.error ?? "Something went wrong");
-    if (data.warning) setWarning(data.warning);
   }
 
   const feed: FeedItem[] = [
@@ -159,7 +169,8 @@ export default function ChatView({
           <div className="mx-auto flex max-w-2xl flex-col gap-3">
             {feed.length === 0 && (
               <p className="text-center text-sm text-zinc-500 dark:text-zinc-500">
-                Say something to start the conversation.
+                Ask a research question — I can search the web for current information and
+                put together a downloadable PDF report if you ask for one.
               </p>
             )}
             {feed.map((item) => {

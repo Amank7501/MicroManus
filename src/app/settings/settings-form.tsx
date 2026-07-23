@@ -61,25 +61,30 @@ export default function SettingsForm({
 
     const model = modelChoice === CUSTOM_MODEL ? customModel.trim() : modelChoice;
 
-    const res = await fetch("/api/settings/key", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider, endpoint, model, apiKey, username, password }),
-    });
-    const data = await res.json();
+    try {
+      const res = await fetch("/api/settings/key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, endpoint, model, apiKey, username, password }),
+      });
+      const data = await res.json();
 
-    setLoading(false);
+      setLoading(false);
 
-    if (!res.ok) {
-      setError(data.error ?? "Something went wrong");
-      return;
+      if (!res.ok) {
+        setError(data.error ?? "Something went wrong");
+        return;
+      }
+
+      setStatus(data.status);
+      setError(data.status === "failed" ? data.message ?? "Connection failed" : null);
+      setApiKey("");
+      setUsername("");
+      setPassword("");
+    } catch {
+      setLoading(false);
+      setError("Couldn't reach the server. Check your connection and try again.");
     }
-
-    setStatus(data.status);
-    setError(data.status === "failed" ? data.message ?? "Connection failed" : null);
-    setApiKey("");
-    setUsername("");
-    setPassword("");
   }
 
   const providerInfo = getProvider(provider)!;

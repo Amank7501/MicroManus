@@ -14,21 +14,26 @@ export default function PaywallForm() {
     setError(null);
     setLoading(true);
 
-    const res = await fetch("/api/coupon/redeem", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code }),
-    });
-    const data = await res.json();
+    try {
+      const res = await fetch("/api/coupon/redeem", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json();
 
-    if (!res.ok) {
-      setError(data.error ?? "Something went wrong");
+      if (!res.ok) {
+        setError(data.error ?? "Something went wrong");
+        setLoading(false);
+        return;
+      }
+
+      router.push("/dashboard");
+      router.refresh();
+    } catch {
       setLoading(false);
-      return;
+      setError("Couldn't reach the server. Check your connection and try again.");
     }
-
-    router.push("/dashboard");
-    router.refresh();
   }
 
   return (

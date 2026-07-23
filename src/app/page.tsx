@@ -15,7 +15,8 @@ export default async function Home() {
             MicroManus
           </h1>
           <p className="mt-2 max-w-md text-lg text-zinc-600 dark:text-zinc-400">
-            A deep-research AI agent. Coming soon.
+            A deep-research AI agent that searches the web and writes PDF reports —
+            using your own OpenAI-compatible API key.
           </p>
         </div>
 

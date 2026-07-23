@@ -31,7 +31,8 @@ export default async function PaywallPage() {
             Unlock MicroManus
           </h1>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-            Get 5 credits with a coupon code, or a one-time $5 payment.
+            Get 5 credits with a coupon code, or a one-time $5 payment — each credit is
+            good for one research run.
           </p>
         </div>
 

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -22,6 +23,15 @@ export default async function DashboardPage() {
     redirect("/paywall");
   }
 
+  const admin = createAdminClient();
+  const { data: apiKey } = await admin
+    .from("api_keys")
+    .select("status")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  const isConnected = apiKey?.status === "connected";
+
   return (
     <div className="flex flex-1 flex-col items-center justify-center bg-zinc-50 font-sans dark:bg-black">
       <main className="flex flex-col items-center gap-4 text-center">
@@ -34,6 +44,25 @@ export default async function DashboardPage() {
         <div className="rounded-full border border-black/[.08] px-4 py-1.5 text-sm font-medium dark:border-white/[.145]">
           {credits.balance} credit{credits.balance === 1 ? "" : "s"} remaining
         </div>
+        <p className="max-w-sm text-xs text-zinc-500 dark:text-zinc-500">
+          1 credit = 1 research run (a chat message that gets a full answer). Check
+          "Cost & stats" for the actual $ spent on tokens, which is separate from your credits.
+        </p>
+
+        {!isConnected && (
+          <div className="flex max-w-sm flex-col items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm dark:border-amber-900/50 dark:bg-amber-950/30">
+            <p className="text-amber-800 dark:text-amber-300">
+              You haven&apos;t connected a model yet — chatting won&apos;t work until you do.
+            </p>
+            <Link
+              href="/settings"
+              className="font-medium text-amber-900 underline underline-offset-4 dark:text-amber-200"
+            >
+              Connect your API key
+            </Link>
+          </div>
+        )}
+
         <div className="flex gap-3">
           <Link
             href="/chat"

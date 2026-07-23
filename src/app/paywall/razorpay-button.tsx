@@ -31,12 +31,20 @@ export default function RazorpayButton() {
     setError(null);
     setLoading(true);
 
-    const orderRes = await fetch("/api/payments/razorpay/order", { method: "POST" });
-    const orderData = await orderRes.json();
+    let orderData: { keyId: string; amount: number; currency: string; orderId: string };
+    try {
+      const orderRes = await fetch("/api/payments/razorpay/order", { method: "POST" });
+      const data = await orderRes.json();
 
-    if (!orderRes.ok) {
-      setError(orderData.error ?? "Could not start payment");
+      if (!orderRes.ok) {
+        setError(data.error ?? "Could not start payment");
+        setLoading(false);
+        return;
+      }
+      orderData = data;
+    } catch {
       setLoading(false);
+      setError("Couldn't reach the server. Check your connection and try again.");
       return;
     }
 
@@ -52,21 +60,29 @@ export default function RazorpayButton() {
         ondismiss: () => setLoading(false),
       },
       handler: async (response: RazorpayResponse) => {
-        const verifyRes = await fetch("/api/payments/razorpay/verify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(response),
-        });
-        const verifyData = await verifyRes.json();
-        setLoading(false);
+        try {
+          const verifyRes = await fetch("/api/payments/razorpay/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(response),
+          });
+          const verifyData = await verifyRes.json();
+          setLoading(false);
 
-        if (!verifyRes.ok) {
-          setError(verifyData.error ?? "Payment verification failed");
-          return;
+          if (!verifyRes.ok) {
+            setError(verifyData.error ?? "Payment verification failed");
+            return;
+          }
+
+          router.push("/dashboard");
+          router.refresh();
+        } catch {
+          setLoading(false);
+          setError(
+            "Payment went through, but we couldn't confirm it here — refresh this page in a " +
+              "moment; it may already be applied.",
+          );
         }
-
-        router.push("/dashboard");
-        router.refresh();
       },
     });
 
