@@ -1,5 +1,6 @@
 import "server-only";
 import { PDFDocument, PDFFont, StandardFonts, rgb } from "pdf-lib";
+import { normalizeCitations } from "./citations";
 
 const PAGE_WIDTH = 595.28; // A4 at 72dpi
 const PAGE_HEIGHT = 841.89;
@@ -49,9 +50,14 @@ function citedIndices(markdown: string): Set<number> {
 
 export async function generateReportPdf(
   title: string,
-  markdown: string,
+  rawMarkdown: string,
   sources: PdfSource[] = [],
 ): Promise<Uint8Array> {
+  // Standard Helvetica (WinAnsi encoding) can't even represent "【"/"】" —
+  // drawText would throw on them, not just fail to detect the citation.
+  // Normalizing to plain "[n]" first fixes both.
+  const markdown = normalizeCitations(rawMarkdown);
+
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const boldFont = await doc.embedFont(StandardFonts.HelveticaBold);

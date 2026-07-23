@@ -5,6 +5,7 @@ import Link from "next/link";
 import NewChatButton from "./new-chat-button";
 import ToolStep from "./tool-step";
 import Markdown, { type Source } from "./markdown";
+import { normalizeCitations } from "@/lib/citations";
 
 type ToolCallInfo = { id: string; function: { name: string; arguments: string } };
 
@@ -107,8 +108,9 @@ function FinalAnswer({
   allMessages: Message[];
   uptoIndex: number;
 }) {
+  const normalizedContent = normalizeCitations(content);
   const sourcesMap = collectRunSources(allMessages, uptoIndex);
-  const cited = citedSourceList(content, sourcesMap);
+  const cited = citedSourceList(normalizedContent, sourcesMap);
 
   return (
     <div className="mr-auto w-full">
@@ -119,7 +121,7 @@ function FinalAnswer({
         <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">MicroManus</span>
       </div>
       <div className="pl-7 text-black dark:text-zinc-50">
-        <Markdown content={content} sources={sourcesMap} />
+        <Markdown content={normalizedContent} sources={sourcesMap} />
         {cited.length > 0 && (
           <div className="mt-3 flex flex-col gap-1 border-t border-black/[.08] pt-3 dark:border-white/[.145]">
             <p className="text-xs font-medium text-zinc-400 dark:text-zinc-500">Sources</p>
