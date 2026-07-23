@@ -7,9 +7,11 @@ export type ToolCall = {
   function: { name: string; arguments: string };
 };
 
+export type Usage = { input: number; output: number; cached: number };
+
 export type AgentMessage =
   | { role: "system" | "user"; content: string }
-  | { role: "assistant"; content: string; tool_calls?: ToolCall[] }
+  | { role: "assistant"; content: string; tool_calls?: ToolCall[]; usage?: Usage }
   | { role: "tool"; content: string; tool_call_id: string };
 
 export type ToolDefinition = {
@@ -43,6 +45,20 @@ const WEB_SEARCH_TOOL: ToolDefinition = {
 // answer each consume one, so this allows a few searches before wrapping up.
 const MAX_STEPS = 5;
 
+function parseUsage(data: Record<string, unknown> | null): Usage | undefined {
+  const usage = data?.usage as Record<string, unknown> | undefined;
+  if (!usage) return undefined;
+
+  const details = usage.prompt_tokens_details as Record<string, unknown> | undefined;
+  const cached = details?.cached_tokens ?? usage.cached_tokens ?? 0;
+
+  return {
+    input: Number(usage.prompt_tokens ?? 0),
+    output: Number(usage.completion_tokens ?? 0),
+    cached: Number(cached),
+  };
+}
+
 async function callModel(
   endpoint: string,
   apiKey: string,
@@ -51,7 +67,7 @@ async function callModel(
   tools: ToolDefinition[],
   allowTools: boolean,
 ): Promise<
-  | { ok: true; message: { content: string | null; tool_calls?: ToolCall[] } }
+  | { ok: true; message: { content: string | null; tool_calls?: ToolCall[] }; usage?: Usage }
   | { ok: false; message: string }
 > {
   const base = endpoint.replace(/\/+$/, "");
@@ -87,7 +103,7 @@ async function callModel(
       return { ok: false, message: "Model returned an empty response" };
     }
 
-    return { ok: true, message };
+    return { ok: true, message, usage: parseUsage(data) };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Request failed";
     return { ok: false, message: message.slice(0, 500) };
@@ -149,7 +165,11 @@ export async function runAgent(
     const toolCalls = result.message.tool_calls ?? [];
 
     if (toolCalls.length === 0) {
-      conversation.push({ role: "assistant", content: result.message.content ?? "" });
+      conversation.push({
+        role: "assistant",
+        content: result.message.content ?? "",
+        usage: result.usage,
+      });
       return { ok: true, newMessages: conversation.slice(startLength) };
     }
 
@@ -157,6 +177,7 @@ export async function runAgent(
       role: "assistant",
       content: result.message.content ?? "",
       tool_calls: toolCalls,
+      usage: result.usage,
     });
 
     const toolResults = await Promise.all(

@@ -146,3 +146,33 @@ drop policy if exists "Users can insert own reports" on public.reports;
 create policy "Users can insert own reports"
   on public.reports for insert
   with check (auth.uid() = user_id);
+
+-- ===== Phase 7: token usage & cost =====
+-- One row per model call (a single agent run can make several — one per
+-- tool-call round plus the final answer). user_id/chat_id are denormalized
+-- from messages/chats so the stats page can aggregate without joins.
+
+create table if not exists public.usage (
+  id uuid primary key default gen_random_uuid(),
+  message_id uuid not null references public.messages (id) on delete cascade,
+  chat_id uuid not null references public.chats (id) on delete cascade,
+  user_id uuid not null references auth.users (id) on delete cascade,
+  model text not null,
+  input_tokens integer not null default 0,
+  output_tokens integer not null default 0,
+  cached_tokens integer not null default 0,
+  cost numeric not null default 0,
+  created_at timestamptz not null default now()
+);
+
+alter table public.usage enable row level security;
+
+drop policy if exists "Users can view own usage" on public.usage;
+create policy "Users can view own usage"
+  on public.usage for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "Users can insert own usage" on public.usage;
+create policy "Users can insert own usage"
+  on public.usage for insert
+  with check (auth.uid() = user_id);

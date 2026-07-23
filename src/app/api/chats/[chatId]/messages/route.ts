@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { decrypt } from "@/lib/crypto";
 import { runAgent, type AgentMessage, type ToolCall, type ToolDefinition } from "@/lib/agent";
 import { generateReportPdf } from "@/lib/pdf";
+import { computeCost } from "@/lib/pricing";
 
 export const maxDuration = 60;
 
@@ -202,6 +203,21 @@ export async function POST(
       .single();
 
     if (row) persisted.push(row);
+
+    if (row && msg.role === "assistant" && msg.usage) {
+      const { input, output, cached } = msg.usage;
+      const cost = computeCost(keyRow.selected_model, input, output, cached);
+      await supabase.from("usage").insert({
+        message_id: row.id,
+        chat_id: chatId,
+        user_id: userId,
+        model: keyRow.selected_model,
+        input_tokens: input,
+        output_tokens: output,
+        cached_tokens: cached,
+        cost,
+      });
+    }
   }
 
   if (!agentResult.ok) {
