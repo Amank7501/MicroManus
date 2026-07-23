@@ -22,6 +22,10 @@ export type AgentMessage =
 export type AgentStep = {
   message: AgentMessage;
   usage?: Usage;
+  // Set when this turn had to fall back to a plain (tool-free) answer
+  // because tool calling kept failing — lets the caller show a friendly
+  // notice instead of silently pretending nothing went wrong.
+  toolsUnavailable?: boolean;
 };
 
 export type ToolDefinition = {
@@ -169,13 +173,29 @@ export async function runAgent(
 
   for (let i = 0; i < MAX_STEPS; i++) {
     const forceFinal = i === MAX_STEPS - 1;
-    const result = await callModel(endpoint, apiKey, model, conversation, tools, !forceFinal);
+    let result = await callModel(endpoint, apiKey, model, conversation, tools, !forceFinal);
+    let toolsUnavailable = false;
+
+    if (!result.ok && !forceFinal) {
+      // Some providers (Groq especially, with smaller/weaker models)
+      // intermittently reject a turn with a tool-call validation error
+      // when the model produces malformed tool-call output. Retry once —
+      // it's often transient — before giving up on tools for this turn.
+      result = await callModel(endpoint, apiKey, model, conversation, tools, true);
+
+      if (!result.ok) {
+        // Still failing. Don't surface a raw provider error to the user —
+        // finish the run with a plain, tool-free answer instead.
+        result = await callModel(endpoint, apiKey, model, conversation, tools, false);
+        toolsUnavailable = true;
+      }
+    }
 
     if (!result.ok) {
       return { ok: false, message: result.message, newMessages: steps };
     }
 
-    const toolCalls = result.message.tool_calls ?? [];
+    const toolCalls = toolsUnavailable ? [] : (result.message.tool_calls ?? []);
 
     if (toolCalls.length === 0) {
       const assistantMessage: AgentMessage = {
@@ -183,7 +203,7 @@ export async function runAgent(
         content: result.message.content ?? "",
       };
       conversation.push(assistantMessage);
-      steps.push({ message: assistantMessage, usage: result.usage });
+      steps.push({ message: assistantMessage, usage: result.usage, toolsUnavailable });
       return { ok: true, newMessages: steps };
     }
 

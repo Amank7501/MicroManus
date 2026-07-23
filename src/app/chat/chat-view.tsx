@@ -70,6 +70,7 @@ export default function ChatView({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -82,6 +83,7 @@ export default function ChatView({
     if (!content || sending || balance <= 0) return;
 
     setError(null);
+    setWarning(null);
     setSending(true);
     setInput("");
 
@@ -110,6 +112,7 @@ export default function ChatView({
 
     if (typeof data.balance === "number") setBalance(data.balance);
     if (!res.ok) setError(data.error ?? "Something went wrong");
+    if (data.warning) setWarning(data.warning);
   }
 
   const feed: FeedItem[] = [
@@ -223,6 +226,12 @@ export default function ChatView({
         {error && (
           <div className="mx-auto w-full max-w-2xl px-6">
             <p className="mb-2 text-sm text-red-600 dark:text-red-400">{error}</p>
+          </div>
+        )}
+
+        {warning && (
+          <div className="mx-auto w-full max-w-2xl px-6">
+            <p className="mb-2 text-sm text-amber-600 dark:text-amber-400">⚠️ {warning}</p>
           </div>
         )}
 

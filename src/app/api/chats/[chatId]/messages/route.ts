@@ -251,10 +251,15 @@ export async function POST(
     .update({ balance: newBalance, updated_at: new Date().toISOString() })
     .eq("user_id", user.id);
 
+  const toolsWereUnavailable = agentResult.newMessages.some((step) => step.toolsUnavailable);
+
   return NextResponse.json({
     userMessage,
     steps: persisted,
     reports: createdReports,
     balance: newBalance,
+    warning: toolsWereUnavailable
+      ? "Tools (like web search) were temporarily unavailable, so this answer was generated without them."
+      : undefined,
   });
 }
