@@ -38,8 +38,14 @@ function buildSystemPrompt(): string {
     "give a clear, well-structured final answer. When asked for a report, " +
     "organize it with headings and cover causes, impact, and what can be done. " +
     "If the user asked for a report or a document they can download, call " +
-    "create_pdf_report once you have enough material, then still give a short " +
-    "final reply summarizing it — the download link is shown separately in the UI. " +
+    "create_pdf_report once you have enough material, then give a short final " +
+    "reply summarizing it. Reuse the exact same [n] citations in that summary " +
+    "that you used in the report — don't drop them just because they're already " +
+    "in the PDF; the chat reply needs its own sources shown too. Never include a " +
+    "download link, markdown link, file path, or URL for the report in your " +
+    "reply — a download button already appears directly above your reply in the " +
+    "UI, so there is nothing to link to; refer to it in plain words only " +
+    "(\"the report above\") if you need to at all. " +
     "Each web_search result includes a numbered \"index\". When a sentence in your " +
     "answer (or in a PDF report) relies on a specific result, cite it immediately " +
     "after with [n] using that exact index — e.g. \"Wildfire acreage doubled [2].\" " +
