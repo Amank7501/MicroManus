@@ -87,3 +87,22 @@ Not yet built — candidates for the next round of work:
 - Never commit secrets. Use `.env.local`; list required env vars in `.env.example`.
 - Keep the UI self-explanatory — no instructions needed to use it.
 - Flag anything that can't be done in code (external dashboards, KYC, deploys) explicitly.
+
+---
+
+## Commit messages
+
+Write at the feature/user level, not the file level. Describe what changed for the user or the product — not which functions or files were touched.
+
+- Subject line: imperative mood, under ~70 chars.
+- Optionally, a blank line then 1–3 bullets of context on *why*.
+
+**Good:**
+- "Stream agent responses in real time"
+- "Show source citations for research answers"
+- "Fix stale dates in time-sensitive searches"
+
+**Avoid:**
+- "Update agent.ts and route.ts"
+- "Refactor callModel signature"
+- "Add usage field to AgentStep"
